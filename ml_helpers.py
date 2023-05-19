@@ -19,10 +19,12 @@ import pandas as pd
 import torch
 
 from sklearn import metrics
-from torch._six import inf
+from torch import inf
+
 from parallel import pmap, pmap_df
 
-persist_dir = Path('./.persistdir')
+persist_dir = Path("./.persistdir")
+
 
 def nested_dict():
     return defaultdict(nested_dict)
@@ -35,8 +37,7 @@ Loggers and Meters
 
 # from the excellent https://github.com/pytorch/vision/blob/master/references/detection/utils.py
 class Meter(object):
-    """Track a series of values and provide access to a number of metric
-    """
+    """Track a series of values and provide access to a number of metric"""
 
     def __init__(self, window_size=20, fmt=None):
         if fmt is None:
@@ -45,14 +46,14 @@ class Meter(object):
         self.total = 0.0
         self.count = 0
 
-        self.M2   = 0
+        self.M2 = 0
         self.mean = 0
         self.fmt = fmt
 
     def reset(self):
         self.total = 0.0
         self.count = 0
-        self.M2    = 0
+        self.M2 = 0
 
     def update(self, value):
         self.deque.append(value)
@@ -103,11 +104,12 @@ class Meter(object):
             avg=self.smoothed_avg,
             global_avg=self.global_avg,
             max=self.max,
-            value=self.value)
+            value=self.value,
+        )
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter=" ", header='', print_freq=1, wandb=None):
+    def __init__(self, delimiter=" ", header="", print_freq=1, wandb=None):
         self.meters = defaultdict(Meter)
         self.delimiter = delimiter
         self.print_freq = print_freq
@@ -118,7 +120,7 @@ class MetricLogger(object):
         for k, v in kwargs.items():
             if isinstance(v, torch.Tensor):
                 v = v.item()
-            assert isinstance(v, (float, int)), f'{k} is of type {type(v)}'
+            assert isinstance(v, (float, int)), f"{k} is of type {type(v)}"
             self.meters[k].update(v)
         if self.wandb is not None:
             self.wandb.log(kwargs)
@@ -128,15 +130,14 @@ class MetricLogger(object):
             return self.meters[attr]
         if attr in self.__dict__:
             return self.__dict__[attr]
-        raise AttributeError("'{}' object has no attribute '{}'".format(
-            type(self).__name__, attr))
+        raise AttributeError(
+            "'{}' object has no attribute '{}'".format(type(self).__name__, attr)
+        )
 
     def __str__(self):
         loss_str = []
         for name, meter in self.meters.items():
-            loss_str.append(
-                "{}: {}".format(name, str(meter))
-            )
+            loss_str.append("{}: {}".format(name, str(meter)))
         return self.delimiter.join(loss_str)
 
     def add_meter(self, name, meter):
@@ -146,28 +147,32 @@ class MetricLogger(object):
         i = 0
         start_time = time.time()
         end = time.time()
-        iter_time = Meter(fmt='{avg:.4f}')
-        data_time = Meter(fmt='{avg:.4f}')
-        space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
+        iter_time = Meter(fmt="{avg:.4f}")
+        data_time = Meter(fmt="{avg:.4f}")
+        space_fmt = ":" + str(len(str(len(iterable)))) + "d"
         if torch.cuda.is_available():
-            log_msg = self.delimiter.join([
-                self.header,
-                '[{0' + space_fmt + '}/{1}]',
-                'eta: {eta}',
-                '{meters}',
-                'time: {time}',
-                'data: {data}',
-                'max mem: {memory:.0f}'
-            ])
+            log_msg = self.delimiter.join(
+                [
+                    self.header,
+                    "[{0" + space_fmt + "}/{1}]",
+                    "eta: {eta}",
+                    "{meters}",
+                    "time: {time}",
+                    "data: {data}",
+                    "max mem: {memory:.0f}",
+                ]
+            )
         else:
-            log_msg = self.delimiter.join([
-                self.header,
-                '[{0' + space_fmt + '}/{1}]',
-                'eta: {eta}',
-                '{meters}',
-                'time: {time}',
-                'data: {data}'
-            ])
+            log_msg = self.delimiter.join(
+                [
+                    self.header,
+                    "[{0" + space_fmt + "}/{1}]",
+                    "eta: {eta}",
+                    "{meters}",
+                    "time: {time}",
+                    "data: {data}",
+                ]
+            )
         MB = 1024.0 * 1024.0
         for obj in iterable:
             data_time.update(time.time() - end)
@@ -177,22 +182,37 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time),
-                        memory=torch.cuda.max_memory_allocated() / MB))
+                    print(
+                        log_msg.format(
+                            i,
+                            len(iterable),
+                            eta=eta_string,
+                            meters=str(self),
+                            time=str(iter_time),
+                            data=str(data_time),
+                            memory=torch.cuda.max_memory_allocated() / MB,
+                        )
+                    )
                 else:
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time)))
+                    print(
+                        log_msg.format(
+                            i,
+                            len(iterable),
+                            eta=eta_string,
+                            meters=str(self),
+                            time=str(iter_time),
+                            data=str(data_time),
+                        )
+                    )
             i += 1
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
-        print('{} Total time: {} ({:.4f} s / it)'.format(
-            self.header, total_time_str, total_time / len(iterable)))
+        print(
+            "{} Total time: {} ({:.4f} s / it)".format(
+                self.header, total_time_str, total_time / len(iterable)
+            )
+        )
 
 
 class ConvergenceMeter(object):
@@ -240,10 +260,16 @@ class ConvergenceMeter(object):
         >>>         break
     """
 
-    def __init__(self, mode='min', patience=10,
-                 verbose=False, threshold=1e-4, threshold_mode='rel',
-                 cooldown=0, eps=1e-8):
-
+    def __init__(
+        self,
+        mode="min",
+        patience=10,
+        verbose=False,
+        threshold=1e-4,
+        threshold_mode="rel",
+        cooldown=0,
+        eps=1e-8,
+    ):
         self.has_converged = False
         self.patience = patience
         self.verbose = verbose
@@ -257,8 +283,9 @@ class ConvergenceMeter(object):
         self.mode_worse = None  # the worse value for the chosen mode
         self.eps = eps
         self.last_epoch = -1
-        self._init_is_better(mode=mode, threshold=threshold,
-                             threshold_mode=threshold_mode)
+        self._init_is_better(
+            mode=mode, threshold=threshold, threshold_mode=threshold_mode
+        )
         self._reset()
 
     def _reset(self):
@@ -295,27 +322,27 @@ class ConvergenceMeter(object):
         return self.cooldown_counter > 0
 
     def is_better(self, a, best):
-        if self.mode == 'min' and self.threshold_mode == 'rel':
-            rel_epsilon = 1. - self.threshold
+        if self.mode == "min" and self.threshold_mode == "rel":
+            rel_epsilon = 1.0 - self.threshold
             return a < best * rel_epsilon
 
-        elif self.mode == 'min' and self.threshold_mode == 'abs':
+        elif self.mode == "min" and self.threshold_mode == "abs":
             return a < best - self.threshold
 
-        elif self.mode == 'max' and self.threshold_mode == 'rel':
-            rel_epsilon = self.threshold + 1.
+        elif self.mode == "max" and self.threshold_mode == "rel":
+            rel_epsilon = self.threshold + 1.0
             return a > best * rel_epsilon
 
         else:  # mode == 'max' and epsilon_mode == 'abs':
             return a > best + self.threshold
 
     def _init_is_better(self, mode, threshold, threshold_mode):
-        if mode not in {'min', 'max'}:
-            raise ValueError('mode ' + mode + ' is unknown!')
-        if threshold_mode not in {'rel', 'abs'}:
-            raise ValueError('threshold mode ' + threshold_mode + ' is unknown!')
+        if mode not in {"min", "max"}:
+            raise ValueError("mode " + mode + " is unknown!")
+        if threshold_mode not in {"rel", "abs"}:
+            raise ValueError("threshold mode " + threshold_mode + " is unknown!")
 
-        if mode == 'min':
+        if mode == "min":
             self.mode_worse = inf
         else:  # mode == 'max':
             self.mode_worse = -inf
@@ -326,7 +353,7 @@ class ConvergenceMeter(object):
 
 
 class BestMeter(object):
-    """ This is like ConvergenceMeter except it stores the
+    """This is like ConvergenceMeter except it stores the
         best result in a set of results. To be used in a
         grid search
 
@@ -338,8 +365,7 @@ class BestMeter(object):
 
     """
 
-    def __init__(self, name='value', mode='max', object_name='epoch', verbose=True):
-
+    def __init__(self, name="value", mode="max", object_name="epoch", verbose=True):
         self.has_converged = False
         self.verbose = verbose
         self.mode = mode
@@ -371,15 +397,15 @@ class BestMeter(object):
         return False
 
     def is_better(self, a, best):
-        if self.mode == 'min':
+        if self.mode == "min":
             return a < best
         else:  # mode == 'max' and epsilon_mode == 'abs':
             return a > best
 
     def _init_is_better(self, mode):
-        if mode not in {'min', 'max'}:
-            raise ValueError('mode ' + mode + ' is unknown!')
-        if mode == 'min':
+        if mode not in {"min", "max"}:
+            raise ValueError("mode " + mode + " is unknown!")
+        if mode == "min":
             self.mode_worse = inf
         else:  # mode == 'max':
             self.mode_worse = -inf
@@ -391,8 +417,6 @@ class BestMeter(object):
 Misc helper functions
 """
 
-def nested_dict():
-    return defaultdict(nested_dict)
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
     def f(x):
@@ -412,30 +436,36 @@ def flatten(container):
         else:
             yield i
 
+
 def scale(x, out_range=(-1, 1)):
-    """ https://codereview.stackexchange.com/questions/185785/scale-numpy-array-to-certain-range"""
+    """https://codereview.stackexchange.com/questions/185785/scale-numpy-array-to-certain-range"""
     domain = np.min(x), np.max(x)
     y = (x - (domain[1] + domain[0]) / 2) / (domain[1] - domain[0])
     return y * (out_range[1] - out_range[0]) + (out_range[1] + out_range[0]) / 2
 
 
-def hits_and_misses(y_hat, y_testing):
-    tp = sum(y_hat + y_testing > 1)
-    tn = sum(y_hat + y_testing == 0)
-    fp = sum(y_hat - y_testing > 0)
-    fn = sum(y_testing - y_hat > 0)
+def hits_and_misses(labels, preds):
+    labels, preds = numpyify(labels), numpyify(preds)
+
+    tp = sum(preds + labels > 1)
+    tn = sum(preds + labels == 0)
+    fp = sum(preds - labels > 0)
+    fn = sum(labels - preds > 0)
     return tp, tn, fp, fn
 
+
 def get_auc(roc):
-    prec = roc['prec'].fillna(1)
-    recall = roc['recall']
+    prec = roc["prec"].fillna(1)
+    recall = roc["recall"]
     return metrics.auc(recall, prec)
 
 
-def classification_metrics(tp, tn, fp, fn):
-    precision   = tp / (tp + fp)
-    recall      = tp / (tp + fn)
-    f1          = 2.0 * (precision * recall / (precision + recall))
+def classification_metrics(labels, preds):
+    tp, tn, fp, fn = hits_and_misses(labels, preds)
+
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    f1 = 2.0 * (precision * recall / (precision + recall))
     sensitivity = tp / (tp + fn)
     specificity = tn / (tn + fp)
 
@@ -448,12 +478,12 @@ def classification_metrics(tp, tn, fp, fn):
         "recall": float(recall),
         "f1": float(f1),
         "sensitivity": float(sensitivity),
-        "specificity": float(specificity)
+        "specificity": float(specificity),
     }
 
 
 def block_print():
-    sys.stdout = open(os.devnull, 'w')
+    sys.stdout = open(os.devnull, "w")
 
 
 def enable_print():
@@ -469,35 +499,59 @@ def get_data_loader(dataset, batch_size, args, shuffle=True):
     Returns: torch.utils.data.DataLoader object
     """
 
-    if args.device == torch.device('cpu'):
-        kwargs = {'num_workers': 4, 'pin_memory': True}
+    if args.device == torch.device("cpu"):
+        kwargs = {"num_workers": 4, "pin_memory": True}
     else:
         kwargs = {}
 
-    return torch.utils.data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, **kwargs)
+    return torch.utils.data.DataLoader(
+        dataset=dataset, batch_size=batch_size, shuffle=shuffle, **kwargs
+    )
+
+
+# def split_train_test_by_percentage(dataset, train_percentage=0.8):
+#     """split pytorch Dataset object by percentage"""
+#     train_length = int(len(dataset) * train_percentage)
+#     return torch.utils.data.random_split(
+#         dataset, (train_length, len(dataset) - train_length)
+#     )
 
 
 def split_train_test_by_percentage(dataset, train_percentage=0.8):
-    """ split pytorch Dataset object by percentage """
+    """split pytorch Dataset object by percentage"""
     train_length = int(len(dataset) * train_percentage)
-    return torch.utils.data.random_split(dataset, (train_length, len(dataset) - train_length))
+    return torch.utils.data.random_split(
+        dataset, (train_length, len(dataset) - train_length)
+    )
 
-def train_test_val(data, splits=(0.7,0.2,0.1)):
+
+def train_test_val(data, splits=(0.7, 0.2, 0.1)):
     train_p, test_p, val_p = splits
     train, testval = train_test_split(data, train_size=train_p)
     if val_p == 0:
         return train, testval
     else:
-        test, val = train_test_split(testval, train_size=test_p/(test_p+val_p))
+        test, val = train_test_split(testval, train_size=test_p / (test_p + val_p))
     return train, test, val
+
 
 def group_train_test_val(data: pd.DataFrame, group: str, **kwargs):
     groups = data[group]
-    return [data[groups.isin(split)] for split in train_test_val(groups.unique(), **kwargs)]
+    return [
+        data[groups.isin(split)] for split in train_test_val(groups.unique(), **kwargs)
+    ]
 
 
-
-persist_dir = Path('./.persistdir')
+def human_format(num, precision=5):
+    s = "{:." + str(precision) + "g}"
+    num = float(s.format(num))
+    magnitude = 0
+    while abs(num) >= 1000:
+        magnitude += 1
+        num /= 1000.0
+    return "{}{}".format(
+        "{:f}".format(num).rstrip("0").rstrip("."), ["", "K", "M", "B", "T"][magnitude]
+    )
 
 
 def put(value, filename):
@@ -522,10 +576,10 @@ def detect_cuda(args):
     if "cuda" not in args.__dict__:
         return args
     if args.cuda and torch.cuda.is_available():
-        args.device = torch.device('cuda')
+        args.device = torch.device("cuda")
         args.cuda = True
     else:
-        args.device = torch.device('cpu')
+        args.device = torch.device("cpu")
         args.cuda = False
     return args
 
@@ -537,6 +591,7 @@ def log_sum_weighted_exp(val1, val2, weight1, weight2):
     lse = val_max + np.log(val1_exp + val2_exp)
     return lse
 
+
 def logaddexp(a, b):
     """Returns log(exp(a) + exp(b))."""
 
@@ -544,8 +599,7 @@ def logaddexp(a, b):
 
 
 def lognormexp(values, dim=0):
-    """Exponentiates, normalizes and takes log of a tensor.
-    """
+    """Exponentiates, normalizes and takes log of a tensor."""
 
     log_denominator = torch.logsumexp(values, dim=dim, keepdim=True)
     # log_numerator = values
@@ -563,15 +617,17 @@ def make_sparse(sparse_mx, args):
 
 
 def adjust_lightness(color, amount=0.5):
-    """ https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib """
+    """https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib"""
     import matplotlib.colors as mc
     import colorsys
+
     try:
         c = mc.cnames[color]
     except:
         c = color
     c = colorsys.rgb_to_hls(*mc.to_rgb(c))
     return colorsys.hls_to_rgb(c[0], max(0, min(1, amount * c[1])), c[2])
+
 
 def exponentiate_and_normalize(values, dim=0):
     """Exponentiates and normalizes a tensor.
@@ -605,15 +661,17 @@ def get_grads(model):
 
 
 def ESS(x):
-    """ Compute the effective sample size of estimand of interest. Vectorised implementation
-        from: https://jwalton.info/Efficient-effective-sample-size-python/
-     """
+    """Compute the effective sample size of estimand of interest. Vectorised implementation
+    from: https://jwalton.info/Efficient-effective-sample-size-python/
+    """
     if x.shape[0] > x.shape[1]:
         x = x.T
 
     m_chains, n_iters = x.shape
 
-    variogram = lambda t: ((x[:, t:] - x[:, :(n_iters - t)])**2).sum() / (m_chains * (n_iters - t))
+    variogram = lambda t: ((x[:, t:] - x[:, : (n_iters - t)]) ** 2).sum() / (
+        m_chains * (n_iters - t)
+    )
 
     post_var = gelman_rubin(x)
 
@@ -626,11 +684,11 @@ def ESS(x):
         rho[t] = 1 - variogram(t) / (2 * post_var)
 
         if not t % 2:
-            negative_autocorr = sum(rho[t-1:t+1]) < 0
+            negative_autocorr = sum(rho[t - 1 : t + 1]) < 0
 
         t += 1
 
-    return int(m_chains*n_iters / (1 + 2*rho[1:t].sum()))
+    return int(m_chains * n_iters / (1 + 2 * rho[1:t].sum()))
 
 
 def ci(a, which=95, axis=None):
@@ -661,17 +719,18 @@ def ESSl(lw):
 
     """
     w = np.exp(lw - lw.max())
-    return (w.sum())**2 / np.sum(w**2)
+    return (w.sum()) ** 2 / np.sum(w**2)
+
 
 def gelman_rubin(x):
-    """ Estimate the marginal posterior variance. Vectorised implementation. """
+    """Estimate the marginal posterior variance. Vectorised implementation."""
     m_chains, n_iters = x.shape
 
     # Calculate between-chain variance
-    B_over_n = ((np.mean(x, axis=1) - np.mean(x))**2).sum() / (m_chains - 1)
+    B_over_n = ((np.mean(x, axis=1) - np.mean(x)) ** 2).sum() / (m_chains - 1)
 
     # Calculate within-chain variances
-    W = ((x - x.mean(axis=1, keepdims=True))**2).sum() / (m_chains*(n_iters - 1))
+    W = ((x - x.mean(axis=1, keepdims=True)) ** 2).sum() / (m_chains * (n_iters - 1))
 
     # (over) estimate of variance
     s2 = W * (n_iters - 1) / n_iters + B_over_n
@@ -679,12 +738,12 @@ def gelman_rubin(x):
     return s2
 
 
-
 def get_unique_dir(comment=None):
-    current_time = datetime.now().strftime('%b%d_%H-%M-%S')
+    current_time = datetime.now().strftime("%b%d_%H-%M-%S")
     host = socket.gethostname()
     name = f"{current_time}_{host}"
-    if comment: name = f"{name}_{comment}"
+    if comment:
+        name = f"{name}_{comment}"
     return name
 
 
@@ -725,7 +784,8 @@ def safe_json_load(path):
 Safe initalizers
 """
 
-def tensor(data, args=None, dtype=torch.float, device=torch.device('cpu')):
+
+def tensor(data, args=None, dtype=torch.float, device=torch.device("cpu")):
     if args is not None:
         device = args.device
     if torch.is_tensor(data):
@@ -788,9 +848,11 @@ def timeit(method):
         ts = time.time()
         result = method(*args, **kw)
         te = time.time()
-        print(f'{method.__name__}:  {te - ts} s')
+        print(f"{method.__name__}:  {te - ts} s")
         return result
+
     return timed
+
 
 def get_frequency(y):
     y = np.bincount(y)
@@ -800,8 +862,8 @@ def get_frequency(y):
 
 def get_debug_args():
     args = SimpleNamespace()
-    args.model_dir = './models'
-    args.data_dir = ''
+    args.model_dir = "./models"
+    args.data_dir = ""
 
     # Training settings
     args.epochs = 10
@@ -826,7 +888,8 @@ def default_init(args):
 
 
 def join_path(*args):
-    return str(Path("/".join(args))) # trick to remove multiple backslashes
+    return str(Path("/".join(args)))  # trick to remove multiple backslashes
+
 
 def add_home(home_dir, *args):
     return [join_path(home_dir, p) for p in args]
