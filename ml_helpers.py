@@ -1,7 +1,6 @@
 from __future__ import division, print_function
-from sklearn.model_selection import train_test_split
-from pprint import pprint
-from types import SimpleNamespace
+from functools import singledispatch
+import colorsys
 import json
 import os
 import random
@@ -11,17 +10,19 @@ import time
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
+from pprint import pprint
+from types import SimpleNamespace
 
 import joblib
+import matplotlib.colors as mc
 
 import numpy as np
 import pandas as pd
 import torch
-
 from sklearn import metrics
+from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split
 from torch import inf
-
-from parallel import pmap, pmap_df
 
 persist_dir = Path("./.persistdir")
 
@@ -29,14 +30,13 @@ persist_dir = Path("./.persistdir")
 def nested_dict():
     return defaultdict(nested_dict)
 
-
-"""
-Loggers and Meters
-"""
+# =====================
+#   Loggers and Meters
+# =====================
 
 
 # from the excellent https://github.com/pytorch/vision/blob/master/references/detection/utils.py
-class Meter(object):
+class Meter:
     """Track a series of values and provide access to a number of metric"""
 
     def __init__(self, window_size=20, fmt=None):
@@ -108,9 +108,10 @@ class Meter(object):
         )
 
 
-class MetricLogger(object):
-    def __init__(self, delimiter=" ", header="", print_freq=1, wandb=None):
-        self.meters = defaultdict(Meter)
+class MetricLogger:
+    def __init__(self, delimiter=" ", header="", print_freq=1, window_size=20, wandb=None):
+        print(f"Window size: {window_size}")
+        self.meters = defaultdict(lambda: Meter(window_size=window_size))
         self.delimiter = delimiter
         self.print_freq = print_freq
         self.header = header
@@ -215,7 +216,7 @@ class MetricLogger(object):
         )
 
 
-class ConvergenceMeter(object):
+class ConvergenceMeter:
     """This is a modification of pytorch's ReduceLROnPlateau object
         (https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#ReduceLROnPlateau)
         which acts as a convergence meter. Everything
@@ -352,7 +353,7 @@ class ConvergenceMeter(object):
         self.threshold_mode = threshold_mode
 
 
-class BestMeter(object):
+class BestMeter:
     """This is like ConvergenceMeter except it stores the
         best result in a set of results. To be used in a
         grid search
@@ -413,9 +414,9 @@ class BestMeter(object):
         self.mode = mode
 
 
-"""
-Misc helper functions
-"""
+# =====================
+# Misc helper functions
+# =====================
 
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
@@ -445,7 +446,7 @@ def scale(x, out_range=(-1, 1)):
 
 
 def hits_and_misses(labels, preds):
-    labels, preds = numpyify(labels), numpyify(preds)
+    labels, preds = to_np(labels), to_np(preds)
 
     tp = sum(preds + labels > 1)
     tn = sum(preds + labels == 0)
@@ -463,11 +464,12 @@ def get_auc(roc):
 def classification_metrics(labels, preds):
     tp, tn, fp, fn = hits_and_misses(labels, preds)
 
-    precision = tp / (tp + fp)
-    recall = tp / (tp + fn)
-    f1 = 2.0 * (precision * recall / (precision + recall))
-    sensitivity = tp / (tp + fn)
-    specificity = tn / (tn + fp)
+    precision   = tp / (tp + fp) if (tp + fp) != 0 else np.nan
+    recall      = tp / (tp + fn) if (tp + fn) != 0 else np.nan
+    sensitivity = tp / (tp + fn) if (tp + fn) != 0 else np.nan
+    specificity = tn / (tn + fp) if (tn + fp) != 0 else np.nan
+
+    f1 = 2.0 * (precision * recall / (precision + recall)) if (precision + recall) != 0 else np.nan
 
     return {
         "tp": float(tp),
@@ -479,6 +481,7 @@ def classification_metrics(labels, preds):
         "f1": float(f1),
         "sensitivity": float(sensitivity),
         "specificity": float(specificity),
+        'acc': accuracy_score(preds, labels),
     }
 
 
@@ -507,14 +510,6 @@ def get_data_loader(dataset, batch_size, args, shuffle=True):
     return torch.utils.data.DataLoader(
         dataset=dataset, batch_size=batch_size, shuffle=shuffle, **kwargs
     )
-
-
-# def split_train_test_by_percentage(dataset, train_percentage=0.8):
-#     """split pytorch Dataset object by percentage"""
-#     train_length = int(len(dataset) * train_percentage)
-#     return torch.utils.data.random_split(
-#         dataset, (train_length, len(dataset) - train_length)
-#     )
 
 
 def split_train_test_by_percentage(dataset, train_percentage=0.8):
@@ -618,9 +613,6 @@ def make_sparse(sparse_mx, args):
 
 def adjust_lightness(color, amount=0.5):
     """https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib"""
-    import matplotlib.colors as mc
-    import colorsys
-
     try:
         c = mc.cnames[color]
     except:
@@ -669,7 +661,7 @@ def ESS(x):
 
     m_chains, n_iters = x.shape
 
-    variogram = lambda t: ((x[:, t:] - x[:, : (n_iters - t)]) ** 2).sum() / (
+    def variogram(t): return ((x[:, t:] - x[:, : (n_iters - t)]) ** 2).sum() / (
         m_chains * (n_iters - t)
     )
 
@@ -684,7 +676,7 @@ def ESS(x):
         rho[t] = 1 - variogram(t) / (2 * post_var)
 
         if not t % 2:
-            negative_autocorr = sum(rho[t - 1 : t + 1]) < 0
+            negative_autocorr = sum(rho[t - 1: t + 1]) < 0
 
         t += 1
 
@@ -800,19 +792,20 @@ def parameter(*args, **kwargs):
     return torch.nn.Parameter(tensor(*args, **kwargs))
 
 
-def numpyify(val):
-    if isinstance(val, dict):
-        return {k: np.array(v) for k, v in val.items()}
-    if isinstance(val, (float, int, list, np.ndarray)):
-        return np.array(val)
-    if isinstance(val, (torch.Tensor)):
-        return val.cpu().numpy()
-    else:
-        raise ValueError("Not handled")
+# following https://martinheinz.dev/blog/50
+@singledispatch
+def to_np(val):
+    return np.array(val)
 
 
-def array(val):
-    return numpyify(val)
+@to_np.register
+def _(val: dict):
+    return {k: np.array(v) for k, v in val.items()}
+
+
+@to_np.register
+def _(val: torch.Tensor):
+    return val.cpu().numpy()
 
 
 def slist(val):
