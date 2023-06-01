@@ -730,6 +730,45 @@ def gelman_rubin(x):
     return s2
 
 
+# from https://stackoverflow.com/questions/50246304/using-python-decorators-to-retry-request
+def retry(times, exceptions, delay=1):
+    """
+    Retry Decorator
+    Retries the wrapped function/method `times` times if the exceptions listed
+    in ``exceptions`` are thrown
+    :param times: The number of times to repeat the wrapped function/method
+    :type times: Int
+    :param Exceptions: Lists of exceptions that trigger a retry attempt
+    :type Exceptions: Tuple of Exceptions
+
+    Example:
+    @retry(times=3, exceptions=(ValueError, TypeError))
+    def foo1():
+        print('Some code here ....')
+        print('Oh no, we have exception')
+        raise ValueError('Some error')
+
+    foo1()
+    """
+    def decorator(func):
+        def newfn(*args, **kwargs):
+            attempt = 0
+            while attempt < times:
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    print(
+                        'Exception thrown when attempting to run %s, attempt '
+                        '%d of %d' % (func, attempt, times)
+                        )
+                    print(e)
+                    attempt += 1
+                    time.sleep(delay)
+            return func(*args, **kwargs)
+        return newfn
+    return decorator
+
+
 def get_unique_dir(comment=None):
     current_time = datetime.now().strftime("%b%d_%H-%M-%S")
     host = socket.gethostname()
