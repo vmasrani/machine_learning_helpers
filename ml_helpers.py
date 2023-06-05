@@ -296,7 +296,7 @@ class ConvergenceMeter:
         self.num_bad_epochs = 0
 
     def update(self, metrics, epoch=None):
-        self.step(metrics, epoch=None)
+        return self.step(metrics, epoch=None)
 
     def step(self, metrics, epoch=None):
         # convert `metrics` to float, in case it's a zero-dim Tensor
@@ -317,6 +317,8 @@ class ConvergenceMeter:
 
         if self.num_bad_epochs > self.patience:
             self.has_converged = True
+
+        return self.has_converged
 
     @property
     def in_cooldown(self):
