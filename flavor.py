@@ -14,6 +14,15 @@ def highlight_best(df,
     best = df.apply(criterion)[col]
     return df.style.apply(lambda x: [style if (x[col] == best) else '' for i in x], axis=1)
 
+@pf.register_dataframe_method
+def print_full(df):
+    with pd.option_context(
+        'display.max_rows', None,
+        'display.max_columns', None,
+        'display.precision', 3,
+        'display.max_colwidth', None):
+        display(df)
+
 
 @pf.register_dataframe_method
 def remove_boring(df):
