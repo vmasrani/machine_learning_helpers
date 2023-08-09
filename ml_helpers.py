@@ -1,8 +1,9 @@
 from __future__ import division, print_function
-import logging
+
 import colorsys
 import contextlib
 import json
+import logging
 import os
 import random
 import socket
@@ -17,26 +18,19 @@ from pathlib import Path
 from pprint import pprint
 from types import SimpleNamespace
 
-import flavor
 import joblib
 import matplotlib.colors as mc
 import numpy as np
 import pandas as pd
 import requests
 import torch
-from parallel import pmap, run_async
 from sklearn import metrics
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from torch import inf
 from urllib3.exceptions import InsecureRequestWarning
 
-os.environ['http_proxy'] = 'http://127.0.0.1:3128'
-os.environ['ftp_proxy'] = 'http://127.0.0.1:3128'
-os.environ['https_proxy'] = 'http://127.0.0.1:3128'
-os.environ['no_proxy'] = '127.0.0.*,*.huawei.com,localhost'
-os.environ['cntlm_proxy'] = '127.0.0.1:3128'
-os.environ['SSL_CERT_DIR'] = '/etc/ssl/certs'
+import flavor
 
 old_merge_environment_settings = requests.Session.merge_environment_settings
 persist_dir = Path("./.persistdir")
@@ -70,11 +64,8 @@ def no_ssl_verification():
         requests.Session.merge_environment_settings = old_merge_environment_settings
 
         for adapter in opened_adapters:
-            try:
+            with contextlib.suppress(Exception):
                 adapter.close()
-            except Exception:
-                pass
-
 
 
 
@@ -844,9 +835,9 @@ def safe_json_load(path):
     return res
 
 
-"""
-Safe initalizers
-"""
+# """
+# Safe initalizers
+# """
 
 
 def tensor(data, args=None, dtype=torch.float, device=torch.device("cpu")):
