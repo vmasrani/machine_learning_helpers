@@ -1,32 +1,81 @@
 from __future__ import division, print_function
-from functools import singledispatch
-import flavor
+import logging
 import colorsys
+import contextlib
 import json
 import os
 import random
 import socket
-from parallel import run_async, pmap
+import ssl
 import sys
 import time
+import warnings
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from functools import singledispatch
 from pathlib import Path
 from pprint import pprint
 from types import SimpleNamespace
 
+import flavor
 import joblib
 import matplotlib.colors as mc
-
 import numpy as np
 import pandas as pd
+import requests
 import torch
+from parallel import pmap, run_async
 from sklearn import metrics
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from torch import inf
+from urllib3.exceptions import InsecureRequestWarning
 
+os.environ['http_proxy'] = 'http://127.0.0.1:3128'
+os.environ['ftp_proxy'] = 'http://127.0.0.1:3128'
+os.environ['https_proxy'] = 'http://127.0.0.1:3128'
+os.environ['no_proxy'] = '127.0.0.*,*.huawei.com,localhost'
+os.environ['cntlm_proxy'] = '127.0.0.1:3128'
+os.environ['SSL_CERT_DIR'] = '/etc/ssl/certs'
+
+old_merge_environment_settings = requests.Session.merge_environment_settings
 persist_dir = Path("./.persistdir")
+
+ssl._create_default_https_context = ssl._create_unverified_context
+
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+
+@contextlib.contextmanager
+def no_ssl_verification():
+    opened_adapters = set()
+
+    def merge_environment_settings(self, url, proxies, stream, verify, cert):
+        # Verification happens only once per connection so we need to close
+        # all the opened adapters once we're done. Otherwise, the effects of
+        # verify=False persist beyond the end of this context manager.
+        opened_adapters.add(self.get_adapter(url))
+
+        settings = old_merge_environment_settings(self, url, proxies, stream, verify, cert)
+        settings["verify"] = False
+
+        return settings
+
+    requests.Session.merge_environment_settings = merge_environment_settings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            yield
+    finally:
+        requests.Session.merge_environment_settings = old_merge_environment_settings
+
+        for adapter in opened_adapters:
+            try:
+                adapter.close()
+            except Exception:
+                pass
+
+
 
 
 def nested_dict():
@@ -134,25 +183,22 @@ class MetricLogger:
         if attr in self.__dict__:
             return self.__dict__[attr]
         raise AttributeError(
-            "'{}' object has no attribute '{}'".format(type(self).__name__, attr)
+            f"'{type(self).__name__}' object has no attribute '{attr}'"
         )
 
     def __str__(self):
-        loss_str = []
-        for name, meter in self.meters.items():
-            loss_str.append("{}: {}".format(name, str(meter)))
+        loss_str = [f"{name}: {str(meter)}" for name, meter in self.meters.items()]
         return self.delimiter.join(loss_str)
 
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
     def step(self, iterable):
-        i = 0
         start_time = time.time()
         end = time.time()
         iter_time = Meter(fmt="{avg:.4f}")
         data_time = Meter(fmt="{avg:.4f}")
-        space_fmt = ":" + str(len(str(len(iterable)))) + "d"
+        space_fmt = f":{len(str(len(iterable)))}d"
         if torch.cuda.is_available():
             log_msg = self.delimiter.join(
                 [
@@ -177,7 +223,7 @@ class MetricLogger:
                 ]
             )
         MB = 1024.0 * 1024.0
-        for obj in iterable:
+        for i, obj in enumerate(iterable):
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
@@ -207,7 +253,6 @@ class MetricLogger:
                             data=str(data_time),
                         )
                     )
-            i += 1
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
@@ -347,11 +392,7 @@ class ConvergenceMeter:
         if threshold_mode not in {"rel", "abs"}:
             raise ValueError("threshold mode " + threshold_mode + " is unknown!")
 
-        if mode == "min":
-            self.mode_worse = inf
-        else:  # mode == 'max':
-            self.mode_worse = -inf
-
+        self.mode_worse = inf if mode == "min" else -inf
         self.mode = mode
         self.threshold = threshold
         self.threshold_mode = threshold_mode
@@ -402,26 +443,18 @@ class BestMeter:
         return False
 
     def is_better(self, a, best):
-        if self.mode == "min":
-            return a < best
-        else:  # mode == 'max' and epsilon_mode == 'abs':
-            return a > best
+        return a < best if self.mode == "min" else a > best
 
     def _init_is_better(self, mode):
         if mode not in {"min", "max"}:
             raise ValueError("mode " + mode + " is unknown!")
-        if mode == "min":
-            self.mode_worse = inf
-        else:  # mode == 'max':
-            self.mode_worse = -inf
-
+        self.mode_worse = inf if mode == "min" else -inf
         self.mode = mode
 
 
 # =====================
 # Misc helper functions
 # =====================
-
 
 def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
     def f(x):
@@ -562,7 +595,7 @@ def put(value, filename):
 
 def get(filename):
     filename = persist_dir / filename
-    assert filename.exists(), "{} doesn't exist".format(filename)
+    assert filename.exists(), f"{filename} doesn't exist"
     print("Loading from ", filename)
     return joblib.load(filename)
 
@@ -587,8 +620,7 @@ def log_sum_weighted_exp(val1, val2, weight1, weight2):
     val_max = np.where(val1 > val2, val1, val2)
     val1_exp = weight1 * np.exp(val1 - val_max)
     val2_exp = weight2 * np.exp(val2 - val_max)
-    lse = val_max + np.log(val1_exp + val2_exp)
-    return lse
+    return val_max + np.log(val1_exp + val2_exp)
 
 
 def logaddexp(a, b):
@@ -619,7 +651,7 @@ def adjust_lightness(color, amount=0.5):
     """https://stackoverflow.com/questions/37765197/darken-or-lighten-a-color-in-matplotlib"""
     try:
         c = mc.cnames[color]
-    except:
+    except Exception:
         c = color
     c = colorsys.rgb_to_hls(*mc.to_rgb(c))
     return colorsys.hls_to_rgb(c[0], max(0, min(1, amount * c[1])), c[2])
@@ -728,10 +760,7 @@ def gelman_rubin(x):
     # Calculate within-chain variances
     W = ((x - x.mean(axis=1, keepdims=True)) ** 2).sum() / (m_chains * (n_iters - 1))
 
-    # (over) estimate of variance
-    s2 = W * (n_iters - 1) / n_iters + B_over_n
-
-    return s2
+    return W * (n_iters - 1) / n_iters + B_over_n
 
 
 # from https://stackoverflow.com/questions/50246304/using-python-decorators-to-retry-request
@@ -855,10 +884,7 @@ def slist(val):
     """
     safe list
     """
-    if isinstance(val, list):
-        return val
-    else:
-        return [val]
+    return val if isinstance(val, list) else [val]
 
 
 def notnan(val):
@@ -893,7 +919,8 @@ def timeit(method):
 def get_frequency(y):
     y = np.bincount(y)
     ii = np.nonzero(y)[0]
-    return {k: v for k, v in zip(ii, y[ii])}
+    # return {k: v for k, v in zip(ii, y[ii])}
+    return dict(zip(ii, y[ii]))
 
 
 def get_debug_args():
