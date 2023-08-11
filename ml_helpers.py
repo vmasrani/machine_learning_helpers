@@ -69,13 +69,11 @@ def add_argument(parser, name, value):
     if isinstance(value, bool):
         parser.add_argument(f"--{name}", default=value, type=str2bool)
     elif isinstance(value, list):
-        parser.add_argument(f"--{name}", type=type(value[0]), nargs='+')
+        parser.add_argument(f"--{name}", default=value, type=type(value[0]), nargs='+')
     elif isinstance(value, (int, float, str)):
         parser.add_argument(f"--{name}", default=value, type=type(value))
     else:
         raise ValueError(f"Unknown type {type(value)} for {name}")
-
-
 
 
 class HyperParams:
