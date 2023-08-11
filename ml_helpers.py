@@ -65,6 +65,19 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def add_argument(parser, name, value):
+    if isinstance(value, bool):
+        parser.add_argument(f"--{name}", default=value, type=str2bool)
+    elif isinstance(value, list):
+        parser.add_argument(f"--{name}", type=type(value[0]), nargs='+')
+    elif isinstance(value, (int, float, str)):
+        parser.add_argument(f"--{name}", default=value, type=type(value))
+    else:
+        raise ValueError(f"Unknown type {type(value)} for {name}")
+
+
+
+
 class HyperParams:
     """
     A class for parsing command line arguments.
@@ -92,10 +105,8 @@ class HyperParams:
 
     def __init__(self):
         self.parser = argparse.ArgumentParser()
-        for name, value in inspect.getmembers(self):
-            if not name.startswith("__") and not inspect.ismethod(value):
-                arg_type = str2bool if isinstance(value, bool) else type(value)
-                self.parser.add_argument(f"--{name}", default=value, type=arg_type)
+        for name, value in self._get_members():
+            add_argument(self.parser, name, value)
         self.parse_args()
 
     def parse_args(self, args=None):
@@ -109,6 +120,15 @@ class HyperParams:
 
     def __str__(self):
         return self._str_helper(0)
+
+    def _get_members(self):
+        for name, value in inspect.getmembers(self):
+            if (
+                not name.startswith("__")
+                and not inspect.ismethod(value)
+                and name != 'parser'
+            ):
+                yield name, value
 
     def to_dict(self):
         """ return a dict representation of the config """
