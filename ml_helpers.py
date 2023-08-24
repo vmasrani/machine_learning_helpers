@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import requests
 import torch
+from typing import Any, Deque
 from torch import inf
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -55,7 +56,7 @@ def no_ssl_verification():
             with contextlib.suppress(Exception):
                 adapter.close()
 
-def str2bool(v):
+def str2bool(v) -> bool:
     if isinstance(v, bool):
         return v
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
@@ -65,7 +66,7 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
-def add_argument(parser, name, value):
+def add_argument(parser, name, value) -> None:
     if isinstance(value, bool):
         parser.add_argument(f"--{name}", default=value, type=str2bool)
     elif isinstance(value, list):
@@ -101,17 +102,23 @@ class HyperParams:
     This will create a `MyArgs` instance with the default values for the attributes, and print them in a pretty format.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.parser = argparse.ArgumentParser()
         for name, value in self._get_members():
             add_argument(self.parser, name, value)
         self.parse_args()
 
-    def parse_args(self, args=None):
+    def parse_args(self, args=None) -> None:
         args, argv = self.parser.parse_known_args(args)
         # crude catches here to transition away from sacred, clean up later
         assert "with" not in argv, "Still using Sacred format"
-        assert len(argv) == 0 or (len(argv) == 1 and "--unobserved" in argv), "Still using Sacred format"
+
+        # Remove --unobserved from argv
+        if "--unobserved" in argv:
+            argv.remove("--unobserved")
+
+        # Raise an assertion if there are any remaining items in argv
+        assert len(argv) == 0, f"Unexpected command line arguments: {argv}"
         for name, value in vars(args).items():
             setattr(self, name, value)
         del self.parser
@@ -161,7 +168,7 @@ class Meter:
     def __init__(self, window_size=20, fmt=None):
         if fmt is None:
             fmt = "{median:.4f} ({global_avg:.4f})"
-        self.deque = deque(maxlen=window_size)
+        self.deque: Any = deque(maxlen=window_size)
         self.total = 0.0
         self.count = 0
 
@@ -395,7 +402,7 @@ class ConvergenceMeter:
         self.threshold = threshold
         self.threshold_mode = threshold_mode
         self.best = None
-        self.num_bad_epochs = None
+        self.num_bad_epochs = 0
         self.mode_worse = None  # the worse value for the chosen mode
         self.eps = eps
         self.last_epoch = -1
@@ -580,7 +587,7 @@ def retry(times, exceptions, delay=1):
     return decorator
 
 
-def default_init(args) -> HyperParams:
+def default_init(args):
     seed_all(args.seed)
     args = detect_cuda(args)
     args.home_dir = str(Path(args.home_dir).absolute())
@@ -594,5 +601,7 @@ def join_path(*args):
     return str(Path("/".join(args)))  # trick to remove multiple backslashes
 
 
-def add_home(home_dir, *args):
+def add_home(home_dir, *args) -> Any:
+    if len(args) == 1:
+        return join_path(home_dir, args[0])
     return [join_path(home_dir, p) for p in args]
