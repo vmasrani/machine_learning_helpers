@@ -1,8 +1,9 @@
 import pandas as pd
-from parallel import pmap, pmap_df
 import pandas_flavor as pf
 import numpy as np
 import polars as pl
+
+from parallel import pmap, pmap_df
 
 @pf.register_dataframe_method
 def to_polars(df, **kwargs):
@@ -17,7 +18,18 @@ def highlight_best(df,
     # other useful styles: 'font-weight: bold'
     # https://pandas.pydata.org/pandas-docs/stable/user_guide/style.html
     best = df.apply(criterion)[col]
-    return df.style.apply(lambda x: [style if (x[col] == best) else '' for i in x], axis=1)
+    return df.style.apply(
+        lambda x: [style if (x[col] == best) else '' for _ in x], axis=1
+    )
+
+@pf.register_dataframe_method
+def print_full(df):
+    with pd.option_context(
+        'display.max_rows', None,
+        'display.max_columns', None,
+        'display.precision', 3,
+        'display.max_colwidth', None):
+        print(df)
 
 
 @pf.register_dataframe_method
@@ -94,10 +106,7 @@ def get_nth_element(df, column_name, n, new_column_name, in_place=False):
     """
 
     df[new_column_name] = df[column_name].str[n]
-    if in_place:
-        return df.drop(column_name, 1)
-    else:
-        return df
+    return df.drop(column_name, 1) if in_place else df
 
 @pf.register_dataframe_method
 def process_dictionary_column(df, column_name):
@@ -165,7 +174,7 @@ def pgroupby(df, groups, f,  **kwargs):
         results = df.pgroupby(['col1','col2'], f)
     '''
     # split into names and groups
-    names, df_split = zip(*[(n,g) for n,g in df.groupby(groups)])
+    names, df_split = zip(*list(df.groupby(groups)))
     # pmap groups
     out = pmap(f, df_split, **kwargs)
     # reassemble and return
