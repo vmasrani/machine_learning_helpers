@@ -60,7 +60,8 @@ class HyperParams:
     """
     A class for parsing command line arguments.
 
-    This class uses the `argparse` module to parse command line arguments and set them as attributes of the class instance.
+    This class uses the `argparse` module to parse command line arguments
+    and set them as attributes of the class instance.
     The default values for the attributes are taken from the class attributes.
 
     Example usage:
@@ -78,7 +79,8 @@ class HyperParams:
     myargs.new_param = 100
     print(myargs)
     ```
-    This will create a `MyArgs` instance with the default values for the attributes, and print them in a pretty format.
+    This will create a `MyArgs` instance with the default values for the attributes,
+    and print them in a pretty format.
     """
 
     def __init__(self) -> None:
@@ -98,11 +100,21 @@ class HyperParams:
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
 
+    def _color_text(self, str, ansi_code=35):
+        # see https://www.geeksforgeeks.org/how-to-add-colour-to-text-python/
+        def _helper(code):
+            return f"\33[{code}m"
+        return _helper(ansi_code) + str + _helper(0)
+
+
     def _add_argument(self, name, value) -> None:
         if isinstance(value, bool):
             self.parser.add_argument(f"--{name}", default=value, type=self._str2bool)
         elif isinstance(value, list):
-            self.parser.add_argument(f"--{name}", default=value, type=type(value[0]), nargs='+')
+            self.parser.add_argument(f"--{name}",
+                                     default=value,
+                                       type=type(value[0]),
+                                       nargs='+')
         elif isinstance(value, (int, float, str)):
             self.parser.add_argument(f"--{name}", default=value, type=type(value))
         else:
@@ -138,7 +150,8 @@ class HyperParams:
 
     def to_dict(self):
         """ return a dict representation of the config """
-        return {k: v.to_dict() if isinstance(v, HyperParams) else v for k, v in self.__dict__.items()}
+        return {k: v.to_dict() if isinstance(v, HyperParams) else v
+                for k, v in self.__dict__.items()}
 
     def merge_from_dict(self, d):
         self.__dict__.update(d)
@@ -150,9 +163,9 @@ class HyperParams:
             if k == "parser":
                 continue
             if isinstance(v, HyperParams):
-                parts.extend(("%s:\n" % k, v._str_helper(indent + 1))) # pylint: disable=W0212
+                parts.extend(("%s:\n" % self._color_text(k), v._str_helper(indent + 1)))
             else:
-                parts.append("%s: %s\n" % (k, v))
+                parts.append("%s: %s\n" % (self._color_text(k), v))
         parts = [' ' * (indent * 4) + p for p in parts]
         parts += ["-"*len(parts[0]) + "\n"]
         return "".join(parts).strip()
