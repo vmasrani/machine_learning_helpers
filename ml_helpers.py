@@ -23,6 +23,7 @@ from torch._six import inf
 from parallel import pmap, pmap_df
 
 persist_dir = Path('./.persistdir')
+get_unix_time = lambda x: int(time.mktime(x.timetuple()))
 
 def nested_dict():
     return defaultdict(nested_dict)
@@ -476,6 +477,20 @@ def get_data_loader(dataset, batch_size, args, shuffle=True):
 
     return torch.utils.data.DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, **kwargs)
 
+
+def get_time_chunks(begin, end, intervals, unix=False):
+    begin = datetime.datetime.now() - datetime.timedelta(days=7)
+    end = datetime.datetime.now()
+    delta = (end - begin)/4
+
+    prev = begin
+
+    for i in range(1, intervals + 1):
+        curr = begin+i*delta
+        yield (get_unix_time(prev), get_unix_time(curr)) if unix else (prev, curr)
+        prev = curr
+
+    yield (get_unix_time(curr), get_unix_time(end)) if unix else (curr, end)
 
 def split_train_test_by_percentage(dataset, train_percentage=0.8):
     """ split pytorch Dataset object by percentage """
