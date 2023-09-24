@@ -21,15 +21,10 @@ from urllib3.exceptions import InsecureRequestWarning
 
 from torch import inf
 
-persist_dir = Path('./.persistdir')
 get_unix_time = lambda x: int(time.mktime(x.timetuple()))
-# import flavor
-
 old_merge_environment_settings = requests.Session.merge_environment_settings
 persist_dir = Path("./.persistdir")
-
 ssl._create_default_https_context = ssl._create_unverified_context
-
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 
@@ -61,27 +56,6 @@ def no_ssl_verification():
             with contextlib.suppress(Exception):
                 adapter.close()
 
-def str2bool(v) -> bool:
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-def add_argument(parser, name, value) -> None:
-    if isinstance(value, bool):
-        parser.add_argument(f"--{name}", default=value, type=str2bool)
-    elif isinstance(value, list):
-        parser.add_argument(f"--{name}", default=value, type=type(value[0]), nargs='+')
-    elif isinstance(value, (int, float, str)):
-        parser.add_argument(f"--{name}", default=value, type=type(value))
-    else:
-        raise ValueError(f"Unknown type {type(value)} for {name}")
-
-
 class HyperParams:
     """
     A class for parsing command line arguments.
@@ -110,8 +84,30 @@ class HyperParams:
     def __init__(self) -> None:
         self.parser = argparse.ArgumentParser()
         for name, value in self._get_members():
-            add_argument(self.parser, name, value)
+            self._add_argument(name, value)
         self.parse_args()
+
+
+    def _str2bool(self, v) -> bool:
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    def _add_argument(self, name, value) -> None:
+        if isinstance(value, bool):
+            self.parser.add_argument(f"--{name}", default=value, type=self._str2bool)
+        elif isinstance(value, list):
+            self.parser.add_argument(f"--{name}", default=value, type=type(value[0]), nargs='+')
+        elif isinstance(value, (int, float, str)):
+            self.parser.add_argument(f"--{name}", default=value, type=type(value))
+        else:
+            raise ValueError(f"Unknown type {type(value)} for {name}")
+
 
     def parse_args(self, args=None) -> None:
         args, argv = self.parser.parse_known_args(args)
@@ -149,7 +145,7 @@ class HyperParams:
 
     def _str_helper(self, indent):
         """ need to have a helper to support nested indentation for pretty printing """
-        parts = []
+        parts = ["-"*40 + "HyperParams" + "-"*40 + "\n"]
         for k, v in self.__dict__.items():
             if k == "parser":
                 continue
@@ -158,8 +154,8 @@ class HyperParams:
             else:
                 parts.append("%s: %s\n" % (k, v))
         parts = [' ' * (indent * 4) + p for p in parts]
+        parts += ["-"*len(parts[0]) + "\n"]
         return "".join(parts).strip()
-
 
 # =====================
 #   Loggers and Meters
