@@ -88,6 +88,7 @@ class HyperParams:
         for name, value in self._get_members():
             self._add_argument(name, value)
         self.parse_args()
+        print(self)
 
 
     def _str2bool(self, v) -> bool:
