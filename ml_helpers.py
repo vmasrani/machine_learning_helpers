@@ -1,3 +1,4 @@
+
 from __future__ import division, print_function
 import argparse
 import inspect
@@ -22,11 +23,10 @@ from urllib3.exceptions import InsecureRequestWarning
 
 # import flavor
 
+get_unix_time = lambda x: int(time.mktime(x.timetuple()))
 old_merge_environment_settings = requests.Session.merge_environment_settings
 persist_dir = Path("./.persistdir")
-
 ssl._create_default_https_context = ssl._create_unverified_context
-
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 
@@ -58,32 +58,12 @@ def no_ssl_verification():
             with contextlib.suppress(Exception):
                 adapter.close()
 
-def str2bool(v) -> bool:
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
-
-def add_argument(parser, name, value) -> None:
-    if isinstance(value, bool):
-        parser.add_argument(f"--{name}", default=value, type=str2bool)
-    elif isinstance(value, list):
-        parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
-    elif isinstance(value, (int, float, str)):
-        parser.add_argument(f"--{name}", default=value, type=type(value))
-    else:
-        raise ValueError(f"Unknown type {type(value)} for {name}")
-
-
 class HyperParams:
     """
     A class for parsing command line arguments.
 
-    This class uses the `argparse` module to parse command line arguments and set them as attributes of the class instance.
+    This class uses the `argparse` module to parse command line arguments
+    and set them as attributes of the class instance.
     The default values for the attributes are taken from the class attributes.
 
     Example usage:
@@ -101,14 +81,45 @@ class HyperParams:
     myargs.new_param = 100
     print(myargs)
     ```
-    This will create a `MyArgs` instance with the default values for the attributes, and print them in a pretty format.
+    This will create a `MyArgs` instance with the default values for the attributes,
+    and print them in a pretty format.
     """
 
     def __init__(self) -> None:
         self.parser = argparse.ArgumentParser()
         for name, value in self._get_members():
-            add_argument(self.parser, name, value)
+            self._add_argument(name, value)
         self.parse_args()
+
+
+    def _str2bool(self, v) -> bool:
+        if isinstance(v, bool):
+            return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'):
+            return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+            return False
+        else:
+            raise argparse.ArgumentTypeError('Boolean value expected.')
+
+    def _color_text(self, str, ansi_code=35):
+        # see https://www.geeksforgeeks.org/how-to-add-colour-to-text-python/
+        def _helper(code):
+            return f"\33[{code}m"
+        return _helper(ansi_code) + str + _helper(0)
+
+
+    def _add_argument(self, name, value) -> None:
+        if isinstance(value, bool):
+            self.parser.add_argument(f"--{name}", default=value, type=self._str2bool)
+        elif isinstance(value, list):
+            self.parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
+
+        elif isinstance(value, (int, float, str)):
+            self.parser.add_argument(f"--{name}", default=value, type=type(value))
+        else:
+            raise ValueError(f"Unknown type {type(value)} for {name}")
+
 
     def parse_args(self, args=None) -> None:
         args, argv = self.parser.parse_known_args(args)
@@ -139,24 +150,25 @@ class HyperParams:
 
     def to_dict(self):
         """ return a dict representation of the config """
-        return {k: v.to_dict() if isinstance(v, HyperParams) else v for k, v in self.__dict__.items()}
+        return {k: v.to_dict() if isinstance(v, HyperParams) else v
+                for k, v in self.__dict__.items()}
 
     def merge_from_dict(self, d):
         self.__dict__.update(d)
 
     def _str_helper(self, indent):
         """ need to have a helper to support nested indentation for pretty printing """
-        parts = []
+        parts = ["-"*40 + "HyperParams" + "-"*40 + "\n"]
         for k, v in self.__dict__.items():
             if k == "parser":
                 continue
             if isinstance(v, HyperParams):
-                parts.extend(("%s:\n" % k, v._str_helper(indent + 1))) # pylint: disable=W0212
+                parts.extend(("%s:\n" % self._color_text(k), v._str_helper(indent + 1)))
             else:
-                parts.append("%s: %s\n" % (k, v))
+                parts.append("%s: %s\n" % (self._color_text(k), v))
         parts = [' ' * (indent * 4) + p for p in parts]
+        parts += ["-"*len(parts[0]) + "\n"]
         return "".join(parts).strip()
-
 
 # =====================
 #   Loggers and Meters
