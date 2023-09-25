@@ -13,6 +13,8 @@ from pathlib import Path
 
 import numpy as np
 import requests
+
+
 import torch
 from typing import Any, Deque
 from torch import inf
@@ -70,7 +72,7 @@ def add_argument(parser, name, value) -> None:
     if isinstance(value, bool):
         parser.add_argument(f"--{name}", default=value, type=str2bool)
     elif isinstance(value, list):
-        parser.add_argument(f"--{name}", default=value, type=type(value[0]), nargs='+')
+        parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
     elif isinstance(value, (int, float, str)):
         parser.add_argument(f"--{name}", default=value, type=type(value))
     else:
@@ -531,7 +533,7 @@ def detect_cuda(args):
     if "cuda" not in args.__dict__:
         return args
     if args.cuda and torch.cuda.is_available():
-        args.device = torch.device("cuda")
+        args.device = torch.device(f"cuda:{args.gpu_number}")
         args.cuda = True
     else:
         args.device = torch.device("cpu")
