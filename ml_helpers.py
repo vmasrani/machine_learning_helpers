@@ -14,12 +14,14 @@ from pathlib import Path
 
 import numpy as np
 import requests
+
+
 import torch
 from typing import Any, Deque
 from torch import inf
 from urllib3.exceptions import InsecureRequestWarning
 
-from torch import inf
+# import flavor
 
 get_unix_time = lambda x: int(time.mktime(x.timetuple()))
 old_merge_environment_settings = requests.Session.merge_environment_settings
@@ -112,10 +114,8 @@ class HyperParams:
         if isinstance(value, bool):
             self.parser.add_argument(f"--{name}", default=value, type=self._str2bool)
         elif isinstance(value, list):
-            self.parser.add_argument(f"--{name}",
-                                     default=value,
-                                       type=type(value[0]),
-                                       nargs='+')
+            self.parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
+
         elif isinstance(value, (int, float, str)):
             self.parser.add_argument(f"--{name}", default=value, type=type(value))
         else:
@@ -546,7 +546,7 @@ def detect_cuda(args):
     if "cuda" not in args.__dict__:
         return args
     if args.cuda and torch.cuda.is_available():
-        args.device = torch.device("cuda")
+        args.device = torch.device(f"cuda:{args.gpu_number}")
         args.cuda = True
     else:
         args.device = torch.device("cpu")
