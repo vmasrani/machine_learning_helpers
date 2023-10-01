@@ -39,25 +39,24 @@ def nested_dict():
 
 def encode(df, cols):
     """
-    Encode the nodes in the dataframe.
+    Encode the values in the specified columns of a DataFrame.
 
-    This function encodes the nodes in the dataframe by replacing the node names with integers.
+    This function encodes the values in the specified columns of a DataFrame. It first creates a set of all unique values in the specified columns, then maps each unique value to an integer. It then replaces each value in the specified columns with its corresponding integer.
 
     Args:
-        df (pandas.DataFrame): The dataframe to encode.
+        df (pandas.DataFrame): The DataFrame to encode.
+        cols (list): A list of column names to encode.
 
     Returns:
-        pandas.DataFrame: The encoded dataframe.
-        dict: A dictionary mapping integers to node names.
-        dict: A dictionary mapping node names to integers.
-
+        pandas.DataFrame: The encoded DataFrame.
+        dict: A dictionary mapping integers to the original string values.
+        dict: A dictionary mapping string values to integers.
     """
     nodes = {node for col in cols for node in df[col].to_list()}
     int_to_string = dict(enumerate(nodes))
     string_to_int = {v: k for k, v in int_to_string.items()}
     df_encoded = df.transform_columns(cols, lambda x: x.map(string_to_int), elementwise=False)
     return df_encoded, int_to_string, string_to_int
-
 
 def read_sql_query_tqdm(query, con, chunksize=1000, **kwargs):
     """
