@@ -37,7 +37,7 @@ def nested_dict():
     """
     return defaultdict(nested_dict)
 
-def encode(df):
+def encode(df, cols):
     """
     Encode the nodes in the dataframe.
 
@@ -52,10 +52,10 @@ def encode(df):
         dict: A dictionary mapping node names to integers.
 
     """
-    nodes = set(df.sender.to_list() + df.receiver.to_list())
+    nodes = {node for col in cols for node in df[col].to_list()}
     int_to_string = dict(enumerate(nodes))
     string_to_int = {v: k for k, v in int_to_string.items()}
-    df_encoded = df.replace(string_to_int)
+    df_encoded = df.transform_columns(cols, lambda x: x.map(string_to_int), elementwise=False)
     return df_encoded, int_to_string, string_to_int
 
 
