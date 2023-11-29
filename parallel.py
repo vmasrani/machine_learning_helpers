@@ -1,14 +1,16 @@
 
 import contextlib
+import multiprocessing
+import time
+
+import janitor
 import joblib
 import numpy as np
 import pandas as pd
-import janitor
-import multiprocessing
-from tqdm.auto import tqdm
 from joblib import Parallel, delayed
 from sklearn.model_selection import GroupKFold
-import time
+from tqdm.auto import tqdm
+
 
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
@@ -30,12 +32,14 @@ def tqdm_joblib(tqdm_object):
         joblib.parallel.BatchCompletionCallBack = old_batch_callback
         tqdm_object.close()
 
-def pmap(f, arr, n_jobs=-1, **kwargs):
-    arr = list(arr) # convert generators to list so tqdm works
-    with tqdm_joblib(tqdm(total=len(arr))) as progress_bar:
+
+def pmap(f, arr, n_jobs=-1, disable_tqdm=False, **kwargs):
+    arr = list(arr)  # convert generators to list so tqdm works
+    with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm)) as progress_bar:
         return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
 
-def pmap_df(f, df, n_chunks = 100, groups=None, axis=0, **kwargs):
+
+def pmap_df(f, df, n_chunks=100, groups=None, axis=0, **kwargs):
     # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
     if groups:
         n_chunks = min(n_chunks, df[groups].nunique())
@@ -47,6 +51,8 @@ def pmap_df(f, df, n_chunks = 100, groups=None, axis=0, **kwargs):
     return df
 
 # For long running jupyter cells
+
+
 def run_async(func):
     """
     # example
@@ -66,9 +72,10 @@ def run_async(func):
         total_time = end_time - start_time
         queue.put(result)
         print(f'Function {func.__name__}{args} {kwargs} Took {total_time:.4f} seconds')
+
     def wrapper(*args, **kwargs):
         queue = multiprocessing.Manager().Queue()
-        process = multiprocessing.Process(target=func_with_queue, args=(queue,*args), kwargs=kwargs)
+        process = multiprocessing.Process(target=func_with_queue, args=(queue, *args), kwargs=kwargs)
         process.start()
         return queue
     return wrapper
