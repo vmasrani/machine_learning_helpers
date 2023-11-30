@@ -1,8 +1,11 @@
 import argparse
 import inspect
+import os
+import sys
+from copy import deepcopy
 
 
-class HyperParams:
+class Hypers:
     """
     A class for parsing command line arguments.
 
@@ -28,11 +31,29 @@ class HyperParams:
     This will create a `MyArgs` instance with the default values for the attributes,
     and print them in a pretty format.
     """
+    # tuples and dicts defined here won't be iterated over
+    valid_types = (int, float, bool, str, list)
+    cmdline_args = tuple(s.replace("--", '').split("=")[0] for s in sys.argv[1:] if "=" in s)
+    parser = argparse.ArgumentParser()
+    cmdline_parser = deepcopy(parser)
+    args_color_map = {
+        'default': 34,
+        'config': 35,
+        'command_line': 33
+    }
+    args_list = {
+        'default': [],
+        'config': [],
+        'command_line': []
+    }
+
+    file_list = {}
 
     def __init__(self) -> None:
-        self.parser = argparse.ArgumentParser()
         for name, value in self._get_members():
-            self._add_argument(name, value)
+            self._add_argument(self.parser, name, value)
+            if name in self.cmdline_args:
+                self._add_argument(self.cmdline_parser, name, value)
         self.parse_args()
         print(self)
 
@@ -46,68 +67,105 @@ class HyperParams:
         else:
             raise argparse.ArgumentTypeError('Boolean value expected.')
 
-    def _color_text(self, str, ansi_code=35):
-        # see https://www.geeksforgeeks.org/how-to-add-colour-to-text-python/
-        def _helper(code):
-            return f"\33[{code}m"
-        return _helper(ansi_code) + str + _helper(0)
-
-    def _add_argument(self, name, value) -> None:
+    def _add_argument(self, parser, name, value) -> None:
         if isinstance(value, bool):
-            self.parser.add_argument(f"--{name}", default=value, type=self._str2bool)
+            parser.add_argument(f"--{name}", default=value, type=self._str2bool)
         elif isinstance(value, list):
-            self.parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
-
+            # assumes list contains entries of same type
+            parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
         elif isinstance(value, (int, float, str)):
-            self.parser.add_argument(f"--{name}", default=value, type=type(value))
+            parser.add_argument(f"--{name}", default=value, type=type(value))
         else:
             raise ValueError(f"Unknown type {type(value)} for {name}")
 
-    def parse_args(self, args=None) -> None:
-        args, argv = self.parser.parse_known_args(args)
-        # crude catches here to transition away from sacred, clean up later
-        assert "with" not in argv, "Still using Sacred format"
+    def _parse_config_file(self, file):
+        variables = {}
+        if not os.path.isfile(file):
+            raise ValueError(f"{file} is not a valid file.")
+        with open(file) as f:
+            exec(f.read(), variables)
 
-        # Remove --unobserved from argv
-        if "--unobserved" in argv:
-            argv.remove("--unobserved")
-
-        # Raise an assertion if there are any remaining items in argv
-        assert len(argv) == 0, f"Unexpected command line arguments: {argv}"
-        for name, value in vars(args).items():
+        count = 0
+        for name, value in variables.items():
+            if name.startswith('_'):
+                continue
             setattr(self, name, value)
-        del self.parser
+            self.args_list['config'].append(name)
+            count += 1
+        self.file_list[file] = count
 
     def __str__(self):
         return self._str_helper(0)
 
     def _get_members(self):
-        for name, value in inspect.getmembers(self):
-            if (
-                not name.startswith("__")
-                and not inspect.ismethod(value)
-                and name != 'parser'
-            ):
-                yield name, value
+        def member_filter(x): return isinstance(x, self.valid_types) and x != "__main__"  # catch main manually
+        yield from inspect.getmembers(self, member_filter)
 
-    def to_dict(self):
-        """ return a dict representation of the config """
-        return {k: v.to_dict() if isinstance(v, HyperParams) else v
-                for k, v in self.__dict__.items()}
+    def parse_args(self, args=None) -> None:
+        # need to parse in this order:
+        # 1. default
+        # 2. configs
+        # 3. command line
+        # this loads default args + command line args
+        default_args, argv = self.parser.parse_known_args(args)
+        cmdline_args, argv = self.cmdline_parser.parse_known_args(args)
 
-    def merge_from_dict(self, d):
-        self.__dict__.update(d)
+        self.args_list['default'] = list(default_args.__dict__.keys())
+        self.args_list['command_line'] = list(cmdline_args.__dict__.keys())
+
+        # 1. load default args
+        for name, value in vars(default_args).items():
+            setattr(self, name, value)
+
+        # handle special cmd line args here
+        # Remove --unobserved from argv (used by wandb)
+        if "--unobserved" in argv:
+            argv.remove("--unobserved")
+
+        # 2. load config args
+        for config in argv:
+            self._parse_config_file(config)
+
+        # 3. load cmd line args
+        for name, value in vars(cmdline_args).items():
+            setattr(self, name, value)
+
+    def _color_text(self, test_str, ansi_code=None):
+        # see https://www.geeksforgeeks.org/how-to-add-colour-to-text-python/
+        if ansi_code is None:
+            if test_str in self.args_list['command_line']:
+                ansi_code = self.args_color_map['command_line']
+            elif test_str in self.args_list['config']:
+                ansi_code = self.args_color_map['config']
+            else:
+                ansi_code = self.args_color_map['default']
+
+        def _helper(code):
+            return f"\33[{code}m"
+        return _helper(ansi_code) + test_str + _helper(0)
 
     def _str_helper(self, indent):
         """ need to have a helper to support nested indentation for pretty printing """
+        default = self._color_text('default', self.args_color_map['default'])
+        config = self._color_text('config', self.args_color_map['config'])
+        command_line = self._color_text('command_line', self.args_color_map['command_line'])
+        legend = f" ({default}, {config}, {command_line})"
         parts = ["-" * 40 + "HyperParams" + "-" * 40 + "\n"]
-        for k, v in self.__dict__.items():
-            if k == "parser":
-                continue
-            if isinstance(v, HyperParams):
-                parts.extend(("%s:\n" % self._color_text(k), v._str_helper(indent + 1)))
-            else:
-                parts.append("%s: %s\n" % (self._color_text(k), v))
+        parts += [" " * 28 + legend + " " * 30 + "\n"]
+        parts += ["\n"]
+        for file, count in self.file_list.items():
+            parts += [f"Reading {count} arguments from {file}" + "\n"]
+        parts += ["\n"]
+        parts.extend(
+            "%s: %s\n" % (self._color_text(k), v) for k, v in self.__dict__.items()
+        )
         parts = [' ' * (indent * 4) + p for p in parts]
         parts += ["-" * len(parts[0]) + "\n"]
         return "".join(parts).strip()
+
+    def to_dict(self):
+        """ return a dict representation of the config """
+        return dict(self.__dict__.items())
+
+    def merge_from_dict(self, d):
+        self.__dict__.update(d)
