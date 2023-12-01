@@ -80,8 +80,12 @@ class Hypers:
 
     def _parse_config_file(self, file):
         variables = {}
+        if "--" in file:
+            raise ValueError(f"{file} is not a valid argument.")
+
         if not os.path.isfile(file):
             raise ValueError(f"{file} is not a valid file.")
+
         with open(file) as f:
             exec(f.read(), variables)
 
