@@ -1,4 +1,5 @@
 import argparse
+from contextlib import suppress
 import inspect
 import os
 import sys
@@ -9,9 +10,9 @@ cmdline_parser = deepcopy(parser)
 
 VALID_TYPES = (int, float, bool, str, list)
 CMDLINE_ARGS = tuple(s.replace("--", '').split("=")[0] for s in sys.argv[1:] if "=" in s)
-COMMAND_LINE_COLOR = 33
-DEFAULT_COLOR      = 34
-CONFIG_COLOR       = 35
+YELLOW = 33
+BLUE   = 34
+PURPLE = 35
 
 COMMAND_LINE_ARGS = []
 DEFAULT_ARGS      = []
@@ -26,9 +27,9 @@ def color(test_str, ansi_code):
 HEADER = f"""\
 {'-' * 40}HyperParams{'-' * 40}
 {' ' * 25}(color code: \
-{color('default', DEFAULT_COLOR)}, \
-{color('config',  CONFIG_COLOR)}, \
-{color('command_line', COMMAND_LINE_COLOR)})\
+{color('default', BLUE)}, \
+{color('config',  PURPLE)}, \
+{color('command_line', YELLOW)})\
 {' ' * 30}
 """
 
@@ -36,32 +37,11 @@ FOOTER = f"{'-' * 90}\n"
 
 def get_code(test_str):
     if test_str in COMMAND_LINE_ARGS:
-        return COMMAND_LINE_COLOR
+        return YELLOW
     elif test_str in CONFIG_ARGS:
-        return CONFIG_COLOR
+        return PURPLE
     else:
-        return DEFAULT_COLOR
-
-def add_argument(parser, name, value) -> None:
-    if isinstance(value, bool):
-        parser.add_argument(f"--{name}", default=value, type=str2bool)
-    elif isinstance(value, list):
-        assert all(isinstance(i, type(value[0])) for i in value), f"All elements in {name} must be of the same type"
-        parser.add_argument(f"--{name}", default=value, type=(type(value[0]) if len(value) > 0 else int), nargs='+')
-    elif isinstance(value, (int, float, str)):
-        parser.add_argument(f"--{name}", default=value, type=type(value))
-    else:
-        raise ValueError(f"Unknown type {type(value)} for {name}")
-
-def str2bool(v) -> bool:
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ('yes', 'true', 't', 'y', '1'):
-        return True
-    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-        return False
-    else:
-        raise argparse.ArgumentTypeError('Boolean value expected.')
+        return BLUE
 
 def member_filter(x):
     return isinstance(x, VALID_TYPES) and x != "__main__"  # catch main manually
@@ -79,6 +59,29 @@ def read_config(file):
 
     return {k:v for k, v in variables.items() if not k.startswith('_')}
 
+def induce_bool(value):
+    if value.lower() in ('yes', 'true', 't', 'y'):
+        return True
+    elif value.lower() in ('no', 'false', 'f', 'n'):
+        return False
+    else:
+        raise ValueError
+
+def induce_type(value):
+    for t in [induce_bool, int, float]:
+        with suppress(ValueError):
+            return t(value)
+    return value
+
+def set_type(string_input):
+    string_input = string_input.split(',')
+    if len(string_input) == 1:
+        return induce_type(string_input[0])
+    else:
+        return list(map(induce_type, string_input))
+
+def add_argument(parser, name, value) -> None:
+    parser.add_argument(f"--{name}", default=value, type=set_type)
 
 
 """
@@ -148,7 +151,6 @@ class Hypers:
     def parse_args(self, args=None) -> None:
         default_args, argv = parser.parse_known_args(args)
         cmdline_args, argv = cmdline_parser.parse_known_args(args)
-
         DEFAULT_ARGS.extend(default_args.__dict__.keys())
         COMMAND_LINE_ARGS.extend(cmdline_args.__dict__.keys())
 
@@ -158,8 +160,10 @@ class Hypers:
         self._load_cmdline_args(cmdline_args)
 
     def to_dict(self):
-        """ return a dict representation of the config """
         return dict(self.__dict__.items())
 
     def merge_from_dict(self, d):
         self.__dict__.update(d)
+
+
+

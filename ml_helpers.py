@@ -522,7 +522,6 @@ def default_init(args):
     seed_all(args.seed)
     args = detect_cuda(args)
     args.home_dir = str(Path(args.home_dir).absolute())
-    pprint(args.__dict__)
     return args
 
 
