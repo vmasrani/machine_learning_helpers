@@ -11,12 +11,12 @@ from torch import inf
 
 
 class Meter(object):
-    """Track a series of values and provide access to a number of metric
+    """Track a series of values and provide access to a number of metrics
     """
 
     def __init__(self, window_size=20, fmt=None):
         if fmt is None:
-            fmt = "{median:.4f} ({global_avg:.4f})"
+            fmt = "{value:.4f} ({avg:.4f})"
         self.deque: Any = deque(maxlen=window_size)
         self.total = 0.0
         self.count = 0
@@ -70,6 +70,10 @@ class Meter(object):
         return max(self.deque)
 
     @property
+    def min(self):
+        return min(self.deque)
+
+    @property
     def value(self):
         return self.deque[-1]
 
@@ -83,12 +87,12 @@ class Meter(object):
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter=" ", header='', print_freq=1, wandb=None):
-        self.meters = defaultdict(Meter)
-        self.delimiter = delimiter
+    def __init__(self, header='', print_freq=1, wandb=None, window_size=20, fmt=None):
+        self.meters = defaultdict(lambda: Meter(window_size=window_size, fmt=fmt))
         self.print_freq = print_freq
         self.header = header
         self.wandb = wandb
+        self.delimiter = " "
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -108,6 +112,9 @@ class MetricLogger(object):
             f"'{type(self).__name__}' object has no attribute '{attr}'"
         )
 
+    def __getitem__(self, key):
+        return self.__getattr__(key)
+
     def __str__(self):
         loss_str = [f"{name}: {str(meter)}" for name, meter in self.meters.items()]
         return self.delimiter.join(loss_str)
@@ -116,6 +123,7 @@ class MetricLogger(object):
         self.meters[name] = meter
 
     def step(self, iterable):
+        iterable = list(iterable) # unnest if generator
         start_time = time.time()
         end = time.time()
         iter_time = Meter(fmt='{avg:.4f}')
@@ -163,7 +171,6 @@ class MetricLogger(object):
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
         print(f'{self.header} Total time: {total_time_str} ({total_time / len(iterable):.4f} s / it)')
-        # print('{} Total time: {} ({:.4f} s / it)'.format(self.header, total_time_str, total_time / len(iterable)))
 
 
 class ConvergenceMeter(object):
