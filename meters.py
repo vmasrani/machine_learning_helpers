@@ -11,13 +11,34 @@ from torch import inf
 
 
 class Meter(object):
-    """Track a series of values and provide access to a number of metric
     """
+    A class to track and compute statistics over a series of values.
 
+    Attributes:
+        window_size (int): The maximum number of recent values to consider for statistics.
+        fmt (str): Format string for printing the meter's statistics.
+        deque (collections.deque): A deque holding the most recent values added.
+        total (float): The sum of all values added.
+        count (int): The total number of values added.
+        mean (float): The current mean of the values.
+
+    Methods:
+        reset(): Resets the meter to its initial state.
+        update(value): Adds a new value to the meter, updating all statistics.
+        var: Returns the variance of the values.
+        sample_var: Returns the sample variance of the values.
+        median: Returns the median of the values.
+        smoothed_avg: Returns the average of the values in the deque.
+        avg: Returns the average of all values added.
+        global_avg: Returns the average of all values added (same as avg).
+        max: Returns the maximum value in the deque.
+        min: Returns the minimum value in the deque.
+        value: Returns the most recently added value.
+    """
     def __init__(self, window_size=20, fmt=None):
         if fmt is None:
-            fmt = "{median:.4f} ({global_avg:.4f})"
-        self.deque: Any = deque(maxlen=window_size)
+            fmt = "{value:.4f} ({avg:.4f})"
+        self.deque = deque(maxlen=window_size)
         self.total = 0.0
         self.count = 0
 
@@ -63,11 +84,15 @@ class Meter(object):
 
     @property
     def global_avg(self):
-        return self.total / self.count
+        return self.avg
 
     @property
     def max(self):
         return max(self.deque)
+
+    @property
+    def min(self):
+        return min(self.deque)
 
     @property
     def value(self):
@@ -83,12 +108,38 @@ class Meter(object):
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter=" ", header='', print_freq=1, wandb=None):
-        self.meters = defaultdict(Meter)
-        self.delimiter = delimiter
+    """
+    A utility class for logging and tracking metrics during training or evaluation.
+
+    This class supports logging scalar values (e.g., loss, accuracy) and uses a sliding window
+    to compute statistics (e.g., average, median) over recent values. It can also log metrics
+    to Weights & Biases (wandb) if provided.
+
+    Attributes:
+        meters (defaultdict): A collection of Meter objects for tracking different metrics.
+        print_freq (int): Frequency (in iterations) at which to print logged metrics.
+        header (str): A header string to prepend to log messages.
+        wandb: An optional Weights & Biases logging object for remote tracking.
+        delimiter (str): The delimiter to use when joining multiple metric strings for printing.
+
+    Args:
+        header (str, optional): A header string to prepend to log messages. Defaults to ''.
+        print_freq (int, optional): Frequency (in iterations) at which to print logged metrics. Defaults to 1.
+        wandb (optional): An optional Weights & Biases logging object for remote tracking. Defaults to None.
+        window_size (int, optional): The size of the sliding window for computing statistics. Defaults to 20.
+        fmt (str, optional): A format string for printing each metric. Defaults to None.
+
+    Methods:
+        update(**kwargs): Updates the tracked metrics with new values.
+        add_meter(name, meter): Adds a new Meter object for tracking a specific metric.
+        step(iterable): Iterates over an iterable, logging metrics at the specified frequency and computing total time.
+    """
+    def __init__(self, header='', print_freq=1, wandb=None, window_size=20, fmt=None):
+        self.meters = defaultdict(lambda: Meter(window_size=window_size, fmt=fmt))
         self.print_freq = print_freq
         self.header = header
         self.wandb = wandb
+        self.delimiter = " "
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -108,6 +159,9 @@ class MetricLogger(object):
             f"'{type(self).__name__}' object has no attribute '{attr}'"
         )
 
+    def __getitem__(self, key):
+        return self.__getattr__(key)
+
     def __str__(self):
         loss_str = [f"{name}: {str(meter)}" for name, meter in self.meters.items()]
         return self.delimiter.join(loss_str)
@@ -116,6 +170,7 @@ class MetricLogger(object):
         self.meters[name] = meter
 
     def step(self, iterable):
+        iterable = list(iterable) # unnest if generator
         start_time = time.time()
         end = time.time()
         iter_time = Meter(fmt='{avg:.4f}')
@@ -163,7 +218,6 @@ class MetricLogger(object):
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
         print(f'{self.header} Total time: {total_time_str} ({total_time / len(iterable):.4f} s / it)')
-        # print('{} Total time: {} ({:.4f} s / it)'.format(self.header, total_time_str, total_time / len(iterable)))
 
 
 class ConvergenceMeter(object):
