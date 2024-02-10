@@ -1,31 +1,68 @@
 from __future__ import division, print_function
-from functools import singledispatch
-from typing import Any
-import janitor
+
 import colorsys
+import contextlib
 import json
 import os
 import random
 import socket
+import ssl
 import sys
 import time
+import warnings
 from collections import defaultdict
 from datetime import datetime
+from functools import singledispatch
 from pathlib import Path
 from pprint import pprint
 from types import SimpleNamespace
+from typing import Any
 
+import janitor
 import joblib
 import matplotlib.colors as mc
 import numpy as np
 import pandas as pd
+import requests
 import torch
 from sklearn import metrics
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
-
 from tqdm.auto import tqdm
+from urllib3.exceptions import InsecureRequestWarning
 
 persist_dir = Path('./.persistdir')
+old_merge_environment_settings = requests.Session.merge_environment_settings
+ssl._create_default_https_context = ssl._create_unverified_context
+
+
+@contextlib.contextmanager
+def no_ssl_verification():
+    opened_adapters = set()
+
+    def merge_environment_settings(self, url, proxies, stream, verify, cert):
+        # Verification happens only once per connection so we need to close
+        # all the opened adapters once we're done. Otherwise, the effects of
+        # verify=False persist beyond the end of this context manager.
+        opened_adapters.add(self.get_adapter(url))
+
+        settings = old_merge_environment_settings(self, url, proxies, stream, verify, cert)
+        settings["verify"] = False
+
+        return settings
+
+    requests.Session.merge_environment_settings = merge_environment_settings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", InsecureRequestWarning)
+            yield
+    finally:
+        requests.Session.merge_environment_settings = old_merge_environment_settings
+
+        for adapter in opened_adapters:
+            with contextlib.suppress(Exception):
+                adapter.close()
 
 
 def nested_dict():
@@ -130,12 +167,15 @@ def get_auc(roc):
     return metrics.auc(recall, prec)
 
 
-def classification_metrics(tp, tn, fp, fn):
-    precision   = tp / (tp + fp)
-    recall      = tp / (tp + fn)
-    f1          = 2.0 * (precision * recall / (precision + recall))
-    sensitivity = tp / (tp + fn)
-    specificity = tn / (tn + fp)
+def classification_metrics(labels, preds):
+    tp, tn, fp, fn = hits_and_misses(labels, preds)
+
+    precision   = tp / (tp + fp) if (tp + fp) != 0 else np.nan
+    recall      = tp / (tp + fn) if (tp + fn) != 0 else np.nan
+    sensitivity = tp / (tp + fn) if (tp + fn) != 0 else np.nan
+    specificity = tn / (tn + fp) if (tn + fp) != 0 else np.nan
+
+    f1 = 2.0 * (precision * recall / (precision + recall)) if (precision + recall) != 0 else np.nan
 
     return {
         "tp": float(tp),
@@ -146,7 +186,8 @@ def classification_metrics(tp, tn, fp, fn):
         "recall": float(recall),
         "f1": float(f1),
         "sensitivity": float(sensitivity),
-        "specificity": float(specificity)
+        "specificity": float(specificity),
+        'acc': accuracy_score(preds, labels),
     }
 
 

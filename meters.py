@@ -1,3 +1,4 @@
+from __future__ import annotations
 from __future__ import division, print_function
 
 import time
@@ -8,6 +9,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch import inf
+from tqdm import tqdm
 
 
 class Meter(object):
@@ -41,6 +43,9 @@ class Meter(object):
         delta2 = value - self.mean
         self.M2 += delta * delta2
 
+    def step(self, value):
+        self.update(value)
+
     @property
     def var(self):
         return self.M2 / self.count if self.count > 2 else 0
@@ -70,6 +75,10 @@ class Meter(object):
         return max(self.deque)
 
     @property
+    def min(self):
+        return min(self.deque)
+
+    @property
     def value(self):
         return self.deque[-1]
 
@@ -79,16 +88,18 @@ class Meter(object):
             avg=self.smoothed_avg,
             global_avg=self.global_avg,
             max=self.max,
+            min=self.min,
             value=self.value)
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter=" ", header='', print_freq=1, wandb=None):
+    def __init__(self, delimiter=" ", header='', print_freq=1, wandb=None, use_tqdm=False):
         self.meters = defaultdict(Meter)
         self.delimiter = delimiter
         self.print_freq = print_freq
         self.header = header
         self.wandb = wandb
+        self.use_tqdm = use_tqdm
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -112,26 +123,27 @@ class MetricLogger(object):
         loss_str = [f"{name}: {str(meter)}" for name, meter in self.meters.items()]
         return self.delimiter.join(loss_str)
 
+    def __getitem__(self, key):
+        return self.__getattr__(key)
+
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
     def step(self, iterable):
+        # convert generators to lists
+        iterable = list(iterable)
         start_time = time.time()
         end = time.time()
         iter_time = Meter(fmt='{avg:.4f}')
         data_time = Meter(fmt='{avg:.4f}')
         space_fmt = f':{len(str(len(iterable)))}d'
-        if torch.cuda.is_available():
-            log_msg = self.delimiter.join([
-                self.header,
-                '[{0' + space_fmt + '}/{1}]',
-                'eta: {eta}',
-                '{meters}',
-                'time: {time}',
-                'data: {data}',
-                'max mem: {memory:.0f}'
-            ])
-        else:
+        pbar = tqdm(total=len(iterable)) if self.use_tqdm else None # Initialize tqdm progress bar
+        for i, obj in enumerate(iterable):
+            data_time.update(time.time() - end)
+            yield obj
+            iter_time.update(time.time() - end)
+            eta_seconds = iter_time.global_avg * (len(iterable) - i)
+            eta_string = str(timedelta(seconds=int(eta_seconds)))
             log_msg = self.delimiter.join([
                 self.header,
                 '[{0' + space_fmt + '}/{1}]',
@@ -140,30 +152,22 @@ class MetricLogger(object):
                 'time: {time}',
                 'data: {data}'
             ])
-        MB = 1024.0 * 1024.0
-        for i, obj in enumerate(iterable):
-            data_time.update(time.time() - end)
-            yield obj
-            iter_time.update(time.time() - end)
-            if i % self.print_freq == 0 or i == len(iterable) - 1:
-                eta_seconds = iter_time.global_avg * (len(iterable) - i)
-                eta_string = str(timedelta(seconds=int(eta_seconds)))
-                if torch.cuda.is_available():
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time),
-                        memory=torch.cuda.max_memory_allocated() / MB))
-                else:
-                    print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
-                        meters=str(self),
-                        time=str(iter_time), data=str(data_time)))
+            log_data = log_msg.format(
+                i, len(iterable), eta=eta_string,
+                meters=str(self),
+                time=str(iter_time), data=str(data_time)
+            )
+            if pbar:
+                pbar.set_description(log_data)  # Update tqdm description
+                pbar.update(1)  # Update tqdm progress
+            else:
+                print(log_data)  # Print log data if not using tqdm
             end = time.time()
+        if self.use_tqdm:
+            pbar.close()  # Close tqdm progress bar
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
         print(f'{self.header} Total time: {total_time_str} ({total_time / len(iterable):.4f} s / it)')
-        # print('{} Total time: {} ({:.4f} s / it)'.format(self.header, total_time_str, total_time / len(iterable)))
 
 
 class ConvergenceMeter(object):

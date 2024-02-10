@@ -1,9 +1,8 @@
-
+from __future__ import annotations
 import contextlib
 import multiprocessing
 import time
 
-import janitor
 import joblib
 import numpy as np
 import pandas as pd
@@ -44,7 +43,7 @@ def pmap_df(f, df, n_chunks=100, groups=None, axis=0, **kwargs):
     if groups:
         n_chunks = min(n_chunks, df[groups].nunique())
         group_kfold = GroupKFold(n_splits=n_chunks)
-        df_split = [df.iloc[test_index]  for _, test_index in group_kfold.split(df, groups=df[groups])]
+        df_split = [df.iloc[test_index] for _, test_index in group_kfold.split(df, groups=df[groups])]
     else:
         df_split = np.array_split(df, n_chunks)
     df = pd.concat(pmap(f, df_split, **kwargs), axis=axis)
