@@ -3,7 +3,7 @@ import pandas_flavor as pf
 import numpy as np
 import polars as pl
 
-from ml_parallel import pmap, pmap_df
+from parallel import pmap, pmap_df
 
 
 @pf.register_dataframe_method
