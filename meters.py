@@ -1,11 +1,11 @@
 from __future__ import annotations
 from __future__ import division, print_function
+import inspect
 
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
 
-from typing import Any
 import numpy as np
 import torch
 from torch import inf
@@ -143,13 +143,14 @@ class MetricLogger(object):
         step(iterable): Iterates over an iterable, logging metrics at the specified frequency and computing total time.
     """
 
-    def __init__(self, header="", print_freq=1, wandb=None, window_size=20, fmt=None, use_tqdm=True):
+    def __init__(self, header="", print_freq=1, wandb=None, window_size=20, fmt=None, use_tqdm=True, itr_len=None):
         self.meters = defaultdict(lambda: Meter(window_size=window_size, fmt=fmt))
         self.print_freq = print_freq
         self.header = header
         self.wandb = wandb
         self.delimiter = " "
         self.use_tqdm = use_tqdm
+        self.itr_len = itr_len
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -158,7 +159,8 @@ class MetricLogger(object):
             assert isinstance(v, (float, int)), f"{k} is of type {type(v)}"
             self.meters[k].update(v)
         if self.wandb is not None:
-            self.wandb.log(kwargs)
+            step = kwargs.pop('step', None)
+            self.wandb.log(kwargs, step=step)
 
     # so we can do MetricLogger.my_metric
     def __getattr__(self, attr):
@@ -185,31 +187,40 @@ class MetricLogger(object):
         end = time.time()
         iter_time = Meter(fmt="{avg:.4f}")
         data_time = Meter(fmt="{avg:.4f}")
-        space_fmt = f":{len(str(len(iterable)))}d"
-        pbar = tqdm(total=len(iterable)) if self.use_tqdm else None  # Initialize tqdm progress bar
+        if inspect.isgenerator(iterable):
+            assert self.itr_len is not None, "Generator passed but itr_len not specified!"
+            itr_len = self.itr_len
+        else:
+            itr_len = len(iterable)
+        space_fmt = f":{len(str(itr_len))}d"
+
+        pbar = tqdm(total=itr_len) if self.use_tqdm else None  # Initialize tqdm progress bar
         for i, obj in enumerate(iterable):
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
-            eta_seconds = iter_time.global_avg * (len(iterable) - i)
+            eta_seconds = iter_time.global_avg * (itr_len - i)
             eta_string = str(timedelta(seconds=int(eta_seconds)))
-            log_msg = self.delimiter.join(
-                [self.header, "[{0" + space_fmt + "}/{1}]", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
-            )
-            log_data = log_msg.format(
-                i, len(iterable), eta=eta_string, meters=str(self), time=str(iter_time), data=str(data_time)
-            )
             if pbar:
+                log_msg = self.delimiter.join([self.header, "{meters}", "data: {data}"])
+                log_data = log_msg.format(meters=str(self), data=str(data_time))
                 pbar.set_description(log_data)  # Update tqdm description
                 pbar.update(1)  # Update tqdm progress
             else:
-                print(log_data)  # Print log data if not using tqdm
+                log_msg = self.delimiter.join(
+                    [self.header, "[{0" + space_fmt + "}/{1}]", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
+                )
+                log_data = log_msg.format(
+                    i+1, itr_len, eta=eta_string, meters=str(self), time=str(iter_time), data=str(data_time)
+                )
+                if (i % self.print_freq) == 0:
+                    print(log_data)  # Print log data if not using tqdm and only every self.print_freq
             end = time.time()
         if self.use_tqdm:
             pbar.close()  # Close tqdm progress bar
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
-        print(f"{self.header} Total time: {total_time_str} ({total_time / len(iterable):.4f} s / it)")
+        print(f"{self.header} Total time: {total_time_str} ({total_time / itr_len:.4f} s / it)")
 
 
 class ConvergenceMeter(object):
