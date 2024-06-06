@@ -168,7 +168,7 @@ def get_auc(roc):
 
 
 def classification_metrics(labels, preds):
-    tp, tn, fp, fn = hits_and_misses(labels, preds)
+    tp, tn, fp, fn = hits_and_misses(preds, labels)
 
     precision   = tp / (tp + fp) if (tp + fp) != 0 else np.nan
     recall      = tp / (tp + fn) if (tp + fn) != 0 else np.nan
