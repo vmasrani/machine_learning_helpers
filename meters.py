@@ -1,11 +1,11 @@
 from __future__ import annotations
 from __future__ import division, print_function
+import inspect
 
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
 
-from typing import Any
 import numpy as np
 import torch
 from torch import inf
@@ -111,7 +111,8 @@ class Meter(object):
             global_avg=self.global_avg,
             max=self.max,
             min=self.min,
-            value=self.value)
+            value=self.value,
+        )
 
 
 class MetricLogger(object):
@@ -142,82 +143,84 @@ class MetricLogger(object):
         step(iterable): Iterates over an iterable, logging metrics at the specified frequency and computing total time.
     """
 
-    def __init__(self, header='', print_freq=1, wandb=None, window_size=20, fmt=None):
+    def __init__(self, header="", print_freq=1, wandb=None, window_size=20, fmt=None, use_tqdm=True, itr_len=None):
         self.meters = defaultdict(lambda: Meter(window_size=window_size, fmt=fmt))
         self.print_freq = print_freq
         self.header = header
         self.wandb = wandb
         self.delimiter = " "
+        self.use_tqdm = use_tqdm
+        self.itr_len = itr_len
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
             if isinstance(v, torch.Tensor):
                 v = v.item()
-            assert isinstance(v, (float, int)), f'{k} is of type {type(v)}'
+            assert isinstance(v, (float, int)), f"{k} is of type {type(v)}"
             self.meters[k].update(v)
         if self.wandb is not None:
-            self.wandb.log(kwargs)
+            step = kwargs.pop('step', None)
+            self.wandb.log(kwargs, step=step)
 
+    # so we can do MetricLogger.my_metric
     def __getattr__(self, attr):
         if attr in self.meters:
             return self.meters[attr]
         if attr in self.__dict__:
             return self.__dict__[attr]
-        raise AttributeError(
-            f"'{type(self).__name__}' object has no attribute '{attr}'"
-        )
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{attr}'")
 
+    # so we can do MetricLogger['my_metric']
     def __getitem__(self, key):
         return self.__getattr__(key)
+
 
     def __str__(self):
         loss_str = [f"{name}: {str(meter)}" for name, meter in self.meters.items()]
         return self.delimiter.join(loss_str)
 
-    def __getitem__(self, key):
-        return self.__getattr__(key)
-
     def add_meter(self, name, meter):
         self.meters[name] = meter
 
     def step(self, iterable):
-        iterable = list(iterable)  # unnest if generator
         start_time = time.time()
         end = time.time()
-        iter_time = Meter(fmt='{avg:.4f}')
-        data_time = Meter(fmt='{avg:.4f}')
-        space_fmt = f':{len(str(len(iterable)))}d'
-        pbar = tqdm(total=len(iterable)) if self.use_tqdm else None  # Initialize tqdm progress bar
+        iter_time = Meter(fmt="{avg:.4f}")
+        data_time = Meter(fmt="{avg:.4f}")
+        if inspect.isgenerator(iterable):
+            assert self.itr_len is not None, "Generator passed but itr_len not specified!"
+            itr_len = self.itr_len
+        else:
+            itr_len = len(iterable)
+        space_fmt = f":{len(str(itr_len))}d"
+
+        pbar = tqdm(total=itr_len) if self.use_tqdm else None  # Initialize tqdm progress bar
         for i, obj in enumerate(iterable):
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
-            eta_seconds = iter_time.global_avg * (len(iterable) - i)
+            eta_seconds = iter_time.global_avg * (itr_len - i)
             eta_string = str(timedelta(seconds=int(eta_seconds)))
-            log_msg = self.delimiter.join([
-                self.header,
-                '[{0' + space_fmt + '}/{1}]',
-                'eta: {eta}',
-                '{meters}',
-                'time: {time}',
-                'data: {data}'
-            ])
-            log_data = log_msg.format(
-                i, len(iterable), eta=eta_string,
-                meters=str(self),
-                time=str(iter_time), data=str(data_time)
-            )
             if pbar:
+                log_msg = self.delimiter.join([self.header, "{meters}", "data: {data}"])
+                log_data = log_msg.format(meters=str(self), data=str(data_time))
                 pbar.set_description(log_data)  # Update tqdm description
                 pbar.update(1)  # Update tqdm progress
             else:
-                print(log_data)  # Print log data if not using tqdm
+                log_msg = self.delimiter.join(
+                    [self.header, "[{0" + space_fmt + "}/{1}]", "eta: {eta}", "{meters}", "time: {time}", "data: {data}"]
+                )
+                log_data = log_msg.format(
+                    i+1, itr_len, eta=eta_string, meters=str(self), time=str(iter_time), data=str(data_time)
+                )
+                if (i % self.print_freq) == 0:
+                    print(log_data)  # Print log data if not using tqdm and only every self.print_freq
             end = time.time()
         if self.use_tqdm:
             pbar.close()  # Close tqdm progress bar
         total_time = time.time() - start_time
         total_time_str = str(timedelta(seconds=int(total_time)))
-        print(f'{self.header} Total time: {total_time_str} ({total_time / len(iterable):.4f} s / it)')
+        print(f"{self.header} Total time: {total_time_str} ({total_time / itr_len:.4f} s / it)")
 
 
 class ConvergenceMeter(object):
@@ -265,10 +268,9 @@ class ConvergenceMeter(object):
         >>>         break
     """
 
-    def __init__(self, mode='min', patience=10,
-                 verbose=False, threshold=1e-4, threshold_mode='rel',
-                 cooldown=0, eps=1e-8):
-
+    def __init__(
+        self, mode="min", patience=10, verbose=False, threshold=1e-4, threshold_mode="rel", cooldown=0, eps=1e-8
+    ):
         self.has_converged = False
         self.patience = patience
         self.verbose = verbose
@@ -282,8 +284,7 @@ class ConvergenceMeter(object):
         self.mode_worse = None  # the worse value for the chosen mode
         self.eps = eps
         self.last_epoch = -1
-        self._init_is_better(mode=mode, threshold=threshold,
-                             threshold_mode=threshold_mode)
+        self._init_is_better(mode=mode, threshold=threshold, threshold_mode=threshold_mode)
         self._reset()
 
     def _reset(self):
@@ -320,34 +321,34 @@ class ConvergenceMeter(object):
         return self.cooldown_counter > 0
 
     def is_better(self, a, best):
-        if self.mode == 'min' and self.threshold_mode == 'rel':
-            rel_epsilon = 1. - self.threshold
+        if self.mode == "min" and self.threshold_mode == "rel":
+            rel_epsilon = 1.0 - self.threshold
             return a < best * rel_epsilon
 
-        elif self.mode == 'min' and self.threshold_mode == 'abs':
+        elif self.mode == "min" and self.threshold_mode == "abs":
             return a < best - self.threshold
 
-        elif self.mode == 'max' and self.threshold_mode == 'rel':
-            rel_epsilon = self.threshold + 1.
+        elif self.mode == "max" and self.threshold_mode == "rel":
+            rel_epsilon = self.threshold + 1.0
             return a > best * rel_epsilon
 
         else:  # mode == 'max' and epsilon_mode == 'abs':
             return a > best + self.threshold
 
     def _init_is_better(self, mode, threshold, threshold_mode):
-        if mode not in {'min', 'max'}:
-            raise ValueError(f'mode {mode} is unknown!')
-        if threshold_mode not in {'rel', 'abs'}:
-            raise ValueError(f'threshold mode {threshold_mode} is unknown!')
+        if mode not in {"min", "max"}:
+            raise ValueError(f"mode {mode} is unknown!")
+        if threshold_mode not in {"rel", "abs"}:
+            raise ValueError(f"threshold mode {threshold_mode} is unknown!")
 
-        self.mode_worse = inf if mode == 'min' else -inf
+        self.mode_worse = inf if mode == "min" else -inf
         self.mode = mode
         self.threshold = threshold
         self.threshold_mode = threshold_mode
 
 
 class BestMeter(object):
-    """ This is like ConvergenceMeter except it stores the
+    """This is like ConvergenceMeter except it stores the
         best result in a set of results. To be used in a
         grid search
 
@@ -359,8 +360,7 @@ class BestMeter(object):
 
     """
 
-    def __init__(self, name='value', mode='max', object_name='epoch', verbose=True):
-
+    def __init__(self, name="value", mode="max", object_name="epoch", verbose=True):
         self.has_converged = False
         self.verbose = verbose
         self.mode = mode
@@ -392,10 +392,10 @@ class BestMeter(object):
         return False
 
     def is_better(self, a, best):
-        return a < best if self.mode == 'min' else a > best
+        return a < best if self.mode == "min" else a > best
 
     def _init_is_better(self, mode):
-        if mode not in {'min', 'max'}:
-            raise ValueError(f'mode {mode} is unknown!')
-        self.mode_worse = inf if mode == 'min' else -inf
+        if mode not in {"min", "max"}:
+            raise ValueError(f"mode {mode} is unknown!")
+        self.mode_worse = inf if mode == "min" else -inf
         self.mode = mode

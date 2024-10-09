@@ -3,7 +3,6 @@ import pandas_flavor as pf
 import numpy as np
 import polars as pl
 import janitor
-from parallel import pmap, pmap_df
 
 
 @pf.register_dataframe_method
