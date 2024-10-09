@@ -9,6 +9,7 @@ import janitor
 def to_polars(df, **kwargs):
     return pl.from_pandas(df, **kwargs)
 
+
 @pf.register_dataframe_method
 def deconc(df, **kwargs):
     return pl.from_pandas(df, **kwargs)
@@ -57,16 +58,12 @@ def add_outer_column(df, value):
 
 
 @pf.register_dataframe_method
-def ppipe(df, f, **kwargs):
-    return pmap_df(f, df, **kwargs)
-
-
-@pf.register_dataframe_method
 def str_get_numbers(df, column_name: str):
     """Wrapper around df.str.replace"""
 
     df[column_name] = df[column_name].str.extract(r'(\d+)', expand=False)
     return df
+
 
 @pf.register_dataframe_method
 def str_drop_after(df, pat, column_name: str):
@@ -238,6 +235,7 @@ def str_word(
     df[column_name] = df[column_name].str.split(pat).str[start:stop]
     return df
 
+
 @pf.register_dataframe_method
 def str_join(df, column_name: str, sep: str, *args, **kwargs):
     """
@@ -266,11 +264,12 @@ def str_split_select(
     name = autoname if autoname else column_name
     if stop is None:
         stop = idx + 1
-    names = [f'{name}_{i}' for i in range(idx,stop)]
+    names = [f'{name}_{i}' for i in range(idx, stop)]
     df[names] = df[column_name].str.split(sep, expand=True).iloc[:, idx:stop]
     if drop:
         return df.drop(column_name, axis=1)
     return df
+
 
 @pf.register_dataframe_method
 def str_slice(
