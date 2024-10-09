@@ -2,12 +2,16 @@ import pandas as pd
 import pandas_flavor as pf
 import numpy as np
 import polars as pl
-
-from ml_parallel import pmap, pmap_df
+import janitor
+from parallel import pmap, pmap_df
 
 
 @pf.register_dataframe_method
 def to_polars(df, **kwargs):
+    return pl.from_pandas(df, **kwargs)
+
+@pf.register_dataframe_method
+def deconc(df, **kwargs):
     return pl.from_pandas(df, **kwargs)
 
 
@@ -62,9 +66,8 @@ def ppipe(df, f, **kwargs):
 def str_get_numbers(df, column_name: str):
     """Wrapper around df.str.replace"""
 
-    df[column_name] = df[column_name].str.extract('(\d+)', expand=False)
+    df[column_name] = df[column_name].str.extract(r'(\d+)', expand=False)
     return df
-
 
 @pf.register_dataframe_method
 def str_drop_after(df, pat, column_name: str):
@@ -236,7 +239,6 @@ def str_word(
     df[column_name] = df[column_name].str.split(pat).str[start:stop]
     return df
 
-
 @pf.register_dataframe_method
 def str_join(df, column_name: str, sep: str, *args, **kwargs):
     """
@@ -247,6 +249,29 @@ def str_join(df, column_name: str, sep: str, *args, **kwargs):
     df[column_name] = df[column_name].str.join(sep)
     return df
 
+
+@pf.register_dataframe_method
+def str_split_select(
+    df,
+    column_name: str,
+    sep: str,
+    idx: int = 0,
+    stop: int = None,
+    autoname=None,
+    drop=True
+):
+    """
+    Wrapper around `df.str.split` with additional `idx` and `end` arguments
+    to select a slice of the list of words.
+    """
+    name = autoname if autoname else column_name
+    if stop is None:
+        stop = idx + 1
+    names = [f'{name}_{i}' for i in range(idx,stop)]
+    df[names] = df[column_name].str.split(sep, expand=True).iloc[:, idx:stop]
+    if drop:
+        return df.drop(column_name, axis=1)
+    return df
 
 @pf.register_dataframe_method
 def str_slice(
