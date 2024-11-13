@@ -16,16 +16,16 @@ def deconc(df, **kwargs):
 
 
 @pf.register_dataframe_method
-def str_drop_after(df, column_name: str,  pat: str, drop: bool = True):
+def str_drop_after(df, column_name: str,  pat: str, drop: bool = True, drop_before=False):
     """Wrapper around df.str.replace"""
     split = df[column_name].str.split(pat=pat, expand=True)
-    if drop:
-        return df.assign(**{column_name: split[0]})
-    else:
+    if not drop:
         return df.assign(**{
             f"{column_name}_left": split[0],
             f"{column_name}_right": split[1]
         })
+    idx = 1 if drop_before else 0
+    return df.assign(**{column_name: split[idx]})
 
 
 @pf.register_dataframe_method
