@@ -170,8 +170,8 @@ def get_auc(roc):
 def classification_metrics(labels, preds):
     tp, tn, fp, fn = hits_and_misses(labels, preds)
 
-    precision   = tp / (tp + fp) if (tp + fp) != 0 else np.nan
-    recall      = tp / (tp + fn) if (tp + fn) != 0 else np.nan
+    precision = tp / (tp + fp) if (tp + fp) != 0 else np.nan
+    recall = tp / (tp + fn) if (tp + fn) != 0 else np.nan
     sensitivity = tp / (tp + fn) if (tp + fn) != 0 else np.nan
     specificity = tn / (tn + fp) if (tn + fp) != 0 else np.nan
 
@@ -524,14 +524,18 @@ def get_all_dirs(path):
     return [p for p in Path(path).glob("*") if p.is_dir()]
 
 
-def timeit(method):
-    def timed(*args, **kw):
-        ts = time.time()
-        result = method(*args, **kw)
-        te = time.time()
-        print(f'{method.__name__}:  {te - ts} s')
-        return result
-    return timed
+def timeit(display=True):
+    def decorator(method):
+        def timed(*args, **kw):
+            ts = time.time()
+            result = method(*args, **kw)
+            te = time.time()
+            if display:
+                print(f'{method.__name__}:  {te - ts} s')
+                return result
+            return result, method.__name__, te - ts
+        return timed
+    return decorator
 
 
 def get_frequency(y):
