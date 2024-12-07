@@ -1,15 +1,19 @@
 from __future__ import annotations
 import contextlib
-import multiprocessing
 import time
-
 import joblib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.model_selection import GroupKFold
 from tqdm.auto import tqdm
+import warnings
 
+# Suppress specific FutureWarning about 'DataFrame.swapaxes'
+warnings.filterwarnings(
+    "ignore",
+    message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
+)
 
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):

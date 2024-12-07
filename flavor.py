@@ -1,8 +1,46 @@
+from parallel import pmap_df
 import pandas as pd
 import pandas_flavor as pf
 import numpy as np
 import polars as pl
 import janitor
+# #define and register your custom functionality
+# @pl.api.register_expr_namespace('custom')
+# class CustomStringMethodsCollection:
+#     def __init__(self, expr: pl.Expr):
+#         self._expr = expr
+
+#     def to_title_case(self) -> pl.Expr:
+#         convert_to_title = (
+#             pl.element().str.slice(0, 1).str.to_uppercase()
+#             +
+#             pl.element().str.slice(1).str.to_lowercase()
+#             )
+
+#         return (
+#             self._expr.str.split(' ')
+#             .arr.eval(convert_to_title)
+#             .arr.join(separator=' ')
+#         )
+
+#     def replace_empty_string_with_null(self) -> pl.Expr:
+#         return (self._expr.pl.when(pl.col(pl.String).str.len_chars() == 0)
+#         .then(None)
+#         .otherwise(pl.col(pl.String))
+#         .name.keep())
+
+
+# def replace_empty_string_with_null(df):
+#     return df.with_columns(
+#         pl.when(pl.col(pl.String).str.len_chars() == 0)
+#         .then(None)
+#         .otherwise(pl.col(pl.String))
+#         .name.keep())
+
+# def drop_all_null_columns(df):
+#     return df[[s.name for s in df if s.null_count() != df.height]]
+
+
 
 
 @pf.register_dataframe_method
@@ -204,6 +242,12 @@ def process_dictionary_column(df, column_name):
                 .drop(column_name, 1))
     else:
         return df
+
+@pf.register_dataframe_method
+def ppipe(df, f, **kwargs):
+    return pmap_df(f, df, **kwargs)
+
+
 
 # collapse_levels(sep='_')
 # @pf.register_dataframe_method
