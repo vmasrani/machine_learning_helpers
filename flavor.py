@@ -4,6 +4,7 @@ import pandas_flavor as pf
 import numpy as np
 import polars as pl
 import janitor
+
 # #define and register your custom functionality
 # @pl.api.register_expr_namespace('custom')
 # class CustomStringMethodsCollection:
@@ -41,6 +42,10 @@ import janitor
 #     return df[[s.name for s in df if s.null_count() != df.height]]
 
 
+
+@pf.register_dataframe_method
+def ppipe(df, f, **kwargs):
+    return pmap_df(f, df, **kwargs)
 
 
 @pf.register_dataframe_method
@@ -243,10 +248,6 @@ def process_dictionary_column(df, column_name):
     else:
         return df
 
-@pf.register_dataframe_method
-def ppipe(df, f, **kwargs):
-    return pmap_df(f, df, **kwargs)
-
 
 
 # collapse_levels(sep='_')
@@ -307,3 +308,25 @@ def pipeprint(df, msg, **kwargs):
     """
     print(msg)
     return df
+
+
+
+# # Function to convert string to appropriate data structure
+# def convert_to_structure(value):
+#     # If the value is already a list, dict, int, or float, return it as is
+#     if isinstance(value, (list, dict, int, float)):
+#         return value
+
+#     # If the value is a string, attempt to parse it
+#     if isinstance(value, str):
+#         try:
+#             # Attempt to evaluate the string as a Python literal
+#             return ast.literal_eval(value)
+#         except (ValueError, SyntaxError):
+#             # Handle malformed strings by attempting a more lenient parsing
+#             if '[' in value:
+#                 formatted_string = value.replace('[', '["').replace(']', '"]').replace(', ', '", "')
+#                 return ast.literal_eval(formatted_string)
+
+#     # Return the value as is if it doesn't match any of the above conditions
+#     return value

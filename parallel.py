@@ -36,9 +36,22 @@ def tqdm_joblib(tqdm_object):
         tqdm_object.close()
 
 
-def pmap(f, arr, n_jobs=-1, disable_tqdm=False, **kwargs):
+def safe(f):
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except Exception as e:
+            error_dict = {'error': str(e), 'args': args, 'kwargs': kwargs}
+            print(error_dict)
+            return error_dict
+    return wrapper
+
+
+def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=True, **kwargs):
     arr = list(arr)  # convert generators to list so tqdm works
-    with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm)) as progress_bar:
+    desc = kwargs.pop('desc', None)
+    f = safe(f) if safe_mode else f
+    with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm, desc=desc)) as progress_bar:
         return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
 
 
