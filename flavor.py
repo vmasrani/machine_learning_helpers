@@ -1,9 +1,14 @@
+import ast
+import contextlib
+from filecmp import cmp
+import json
 from parallel import pmap_df
 import pandas as pd
 import pandas_flavor as pf
 import numpy as np
 import polars as pl
 import janitor
+from ml_helpers import parse_str_to_json
 
 # #define and register your custom functionality
 # @pl.api.register_expr_namespace('custom')
@@ -42,24 +47,104 @@ import janitor
 #     return df[[s.name for s in df if s.null_count() != df.height]]
 
 
+# # Function to convert string to appropriate data structure
+# def _convert_to_structure(value):
+#     # If the value is already a list, dict, int, or float, return it as is
+#     if isinstance(value, (list, dict, int, float)):
+#         return value
+
+#     # If the value is a string, attempt to parse it
+#     if isinstance(value, str):
+#         try:
+#             # Attempt to evaluate the string as a Python literal
+#             return ast.literal_eval(value)
+#         except (ValueError, SyntaxError):
+#             # Handle malformed strings by attempting a more lenient parsing
+#             if '[' in value:
+#                 formatted_string = value.replace('[', '["').replace(']', '"]').replace(', ', '", "')
+#                 return ast.literal_eval(formatted_string)
+#     # Return the value as is if it doesn't match any of the above conditions
+#     return value
+
 
 @pf.register_dataframe_method
-def ppipe(df, f, **kwargs):
+def convert_str_to_json(df, cols=None):
+    df = df.copy()
+    if cols is None:
+        cols = df.columns.tolist()
+    if isinstance(cols, str):
+        cols = [cols]
+
+    def _safe_parse_json(col):
+        with contextlib.suppress(Exception):
+            return col.apply(parse_str_to_json)
+        return col
+
+    return df.assign(**{c: _safe_parse_json(df[c]) for c in cols})
+
+
+@pf.register_dataframe_method
+def unwrap_dict_in_list(df: pd.DataFrame, cols: list[str] | str | None = None) -> pd.DataFrame:
+    def unwrap_dict(x): # type: ignore
+        if isinstance(x, list) and len(x) == 1 and isinstance(x[0], dict):
+            return x[0]
+        return x
+
+    return (df.transform_columns(cols or list(df.columns), unwrap_dict))
+
+
+@pf.register_dataframe_method
+def json_normalize_dataframe(df):
+    json_str = df.unwrap_dict_in_list().to_json(orient='records')
+    return pd.json_normalize(json.loads(json_str))
+
+
+# @pf.register_dataframe_method
+# def convert_to_structure(df, cols=None):
+#     if cols is None:
+#         cols = df.columns.tolist()
+#     if isinstance(cols, str):
+#         cols = [cols]
+#     return df.transform_columns(cols, _convert_to_structure)
+
+
+
+# @pf.register_dataframe_method
+# def convert_to_structure(df, cols=None):
+#     if cols is None:
+#         cols = df.columns.tolist()
+#     if isinstance(cols, str):
+#         cols = [cols]
+#     return df.transform_columns(cols, _convert_to_structure)
+
+
+@pf.register_dataframe_method
+def ppipe(df, f, **kwargs) -> pd.DataFrame:
     return pmap_df(f, df, **kwargs)
 
 
 @pf.register_dataframe_method
-def to_polars(df, **kwargs):
+def to_polars(df, **kwargs) -> pl.DataFrame:
     return pl.from_pandas(df, **kwargs)
 
 
 @pf.register_dataframe_method
-def deconc(df, **kwargs):
+def deconc(df, **kwargs) -> pd.DataFrame:
     return pl.from_pandas(df, **kwargs)
 
 
 @pf.register_dataframe_method
-def str_drop_after(df, column_name: str,  pat: str, drop: bool = True, drop_before=False):
+def sort_columns_naturally(df) -> pd.DataFrame:
+    cols = (pd
+        .DataFrame(df.columns.tolist(), columns=['headers'])
+        .sort_naturally('headers')
+        .headers
+        .tolist()
+    )
+    return df[cols]
+
+@pf.register_dataframe_method
+def str_drop_after(df: pd.DataFrame, column_name: str,  pat: str, drop: bool = True, drop_before=False) -> pd.DataFrame:
     """Wrapper around df.str.replace"""
     split = df[column_name].str.split(pat=pat, expand=True)
     if not drop:
@@ -72,26 +157,26 @@ def str_drop_after(df, column_name: str,  pat: str, drop: bool = True, drop_befo
 
 
 @pf.register_dataframe_method
-def str_remove(df, column_name: str, pat: str, *args, **kwargs):
+def str_remove(df: pd.DataFrame, column_name: str, pat: str, *args, **kwargs) -> pd.DataFrame:
     """Wrapper around df.str.replace"""
     return df.assign(**{column_name: df[column_name].str.replace(pat, "", *args, **kwargs)})
 
 
 @pf.register_dataframe_method
-def str_replace(df, column_name: str, pat_from: str, pat_to: str, *args, **kwargs):
+def str_replace(df: pd.DataFrame, column_name: str, pat_from: str, pat_to: str, *args, **kwargs) -> pd.DataFrame:
     """Wrapper around df.str.replace"""
     return df.assign(**{column_name: df[column_name].str.replace(pat_from, pat_to, *args, **kwargs)})
 
 
 @pf.register_dataframe_method
-def str_trim(df, column_name: str, *args, **kwargs):
+def str_trim(df: pd.DataFrame, column_name: str, *args, **kwargs) -> pd.DataFrame:
     """Wrapper around df.str.strip"""
     return df.assign(**{column_name: df[column_name].str.strip(*args, **kwargs)})
 
 
 @pf.register_dataframe_method
 def str_word(
-    df,
+    df: pd.DataFrame,
     column_name: str,
     start: int = None,
     stop: int = None,
@@ -107,7 +192,7 @@ def str_word(
 
 
 @pf.register_dataframe_method
-def str_join(df, column_name: str, sep: str, *args, **kwargs):
+def str_join(df: pd.DataFrame, column_name: str, sep: str, *args, **kwargs) -> pd.DataFrame:
     """
     Wrapper around `df.str.join`
     Joins items in a list.
@@ -117,7 +202,7 @@ def str_join(df, column_name: str, sep: str, *args, **kwargs):
 
 @pf.register_dataframe_method
 def str_split_select(
-    df,
+    df: pd.DataFrame,
     column_name: str,
     sep: str,
     idx: int = 0,
@@ -140,8 +225,8 @@ def str_split_select(
 
 @pf.register_dataframe_method
 def str_slice(
-    df, column_name: str, start: int = None, stop: int = None, *args, **kwargs
-):
+    df: pd.DataFrame, column_name: str, start: int = None, stop: int = None, *args, **kwargs
+) -> pd.DataFrame:
     """
     Wrapper around `df.str.slice`
     """
@@ -149,11 +234,11 @@ def str_slice(
 
 
 @pf.register_dataframe_method
-def highlight_best(df,
-                   col,
+def highlight_best(df: pd.DataFrame,
+                   col: str,
                    criterion=np.max,
                    style='background: lightgreen'
-                   ):
+                   ) -> pd.DataFrame:
     # other useful styles: 'font-weight: bold'
     # https://pandas.pydata.org/pandas-docs/stable/user_guide/style.html
     best = df.apply(criterion)[col]
@@ -163,7 +248,7 @@ def highlight_best(df,
 
 
 @pf.register_dataframe_method
-def print_full(df):
+def print_full(df: pd.DataFrame) -> None:
     with pd.option_context(
         'display.max_rows', None,
         'display.max_columns', None,
@@ -173,7 +258,7 @@ def print_full(df):
 
 
 @pf.register_dataframe_method
-def remove_boring(df):
+def remove_boring(df: pd.DataFrame) -> pd.DataFrame:
     non_null_cols = df.dropna(axis=1, how='all').columns
     interesting_cols = [i for i in non_null_cols if len(set(df[i])) > 1]
     return df.loc[:, interesting_cols]
@@ -181,24 +266,24 @@ def remove_boring(df):
 
 @pf.register_dataframe_method
 @pf.register_series_method
-def add_outer_index(df, value, name):
+def add_outer_index(df: pd.DataFrame, value: str, name: str) -> pd.DataFrame:
     return pd.concat({value: df}, names=[name])
 
 
 @pf.register_dataframe_method
-def add_outer_column(df, value):
+def add_outer_column(df: pd.DataFrame, value: str) -> pd.DataFrame:
     df.columns = pd.MultiIndex.from_arrays([[value]*len(df.columns), df.columns])
     return df
 
 
 @pf.register_dataframe_method
-def str_get_numbers(df, column_name: str):
+def str_get_numbers(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
     """Wrapper around df.str.extract"""
     return df.assign(**{column_name: df[column_name].str.extract(r'(\d+)', expand=False)})
 
 
 @pf.register_dataframe_method
-def expand_list_column(df, column_name, output_column_names):
+def expand_list_column(df: pd.DataFrame, column_name: str, output_column_names: list[str]) -> pd.DataFrame:
     """
 
     #     AMOUNT    LISTCOL
@@ -221,7 +306,7 @@ def expand_list_column(df, column_name, output_column_names):
 
 
 @pf.register_dataframe_method
-def get_nth_element(df, column_name, n, new_column_name, drop=False):
+def get_nth_element(df: pd.DataFrame, column_name: str, n: int, new_column_name: str, drop: bool = False) -> pd.DataFrame:
     """
     #     AMOUNT    column_name
     #     0       [1,2,3]
@@ -240,7 +325,7 @@ def get_nth_element(df, column_name, n, new_column_name, drop=False):
 
 
 @pf.register_dataframe_method
-def process_dictionary_column(df, column_name):
+def process_dictionary_column(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
     if column_name in df.columns:
         return (df
                 .join(df[column_name].apply(pd.Series))

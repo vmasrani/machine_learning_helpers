@@ -1,5 +1,6 @@
 from __future__ import annotations
 import contextlib
+import multiprocessing
 import time
 import joblib
 import numpy as np
@@ -47,7 +48,7 @@ def safe(f):
     return wrapper
 
 
-def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=True, **kwargs):
+def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, **kwargs):
     arr = list(arr)  # convert generators to list so tqdm works
     desc = kwargs.pop('desc', None)
     f = safe(f) if safe_mode else f
