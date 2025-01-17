@@ -1,5 +1,6 @@
 from __future__ import annotations
 import contextlib
+import multiprocessing
 import time
 import joblib
 import numpy as np
@@ -47,7 +48,7 @@ def safe(f):
     return wrapper
 
 
-def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=True, **kwargs):
+def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, **kwargs):
     arr = list(arr)  # convert generators to list so tqdm works
     desc = kwargs.pop('desc', None)
     f = safe(f) if safe_mode else f
@@ -55,7 +56,7 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=True, **kwargs):
         return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
 
 
-def pmap_df(f, df, n_chunks=100, groups=None, axis=0, **kwargs):
+def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs):
     # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
     if groups:
         n_chunks = min(n_chunks, df[groups].nunique())
@@ -63,7 +64,7 @@ def pmap_df(f, df, n_chunks=100, groups=None, axis=0, **kwargs):
         df_split = [df.iloc[test_index] for _, test_index in group_kfold.split(df, groups=df[groups])]
     else:
         df_split = np.array_split(df, n_chunks)
-    df = pd.concat(pmap(f, df_split, **kwargs), axis=axis)
+    df = pd.concat(pmap(f, df_split, safe_mode=safe_mode, **kwargs), axis=axis)
     return df
 
 # For long running jupyter cells
