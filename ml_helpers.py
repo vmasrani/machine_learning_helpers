@@ -66,6 +66,16 @@ def no_ssl_verification():
                 adapter.close()
 
 
+
+
+def parse_str_to_json(data):
+    if isinstance(data, list):
+        return [parse_str_to_json(item) for item in data]
+    data = data.replace("'", '"').replace("None", "null").replace("True", "true").replace("False", "false")
+    return json.loads(data)
+
+
+
 def nested_dict():
     return defaultdict(nested_dict)
 
