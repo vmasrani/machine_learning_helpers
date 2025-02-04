@@ -29,43 +29,13 @@ from sklearn import metrics
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
-from urllib3.exceptions import InsecureRequestWarning
 
 persist_dir = Path('./.persistdir')
-old_merge_environment_settings = requests.Session.merge_environment_settings
-ssl._create_default_https_context = ssl._create_unverified_context
 
-
-@contextlib.contextmanager
-def no_ssl_verification():
-    opened_adapters = set()
-
-    def merge_environment_settings(self, url, proxies, stream, verify, cert):
-        # Verification happens only once per connection so we need to close
-        # all the opened adapters once we're done. Otherwise, the effects of
-        # verify=False persist beyond the end of this context manager.
-        opened_adapters.add(self.get_adapter(url))
-
-        settings = old_merge_environment_settings(self, url, proxies, stream, verify, cert)
-        settings["verify"] = False
-
-        return settings
-
-    requests.Session.merge_environment_settings = merge_environment_settings
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", InsecureRequestWarning)
-            yield
-    finally:
-        requests.Session.merge_environment_settings = old_merge_environment_settings
-
-        for adapter in opened_adapters:
-            with contextlib.suppress(Exception):
-                adapter.close()
-
-
-
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
 
 def parse_str_to_json(data):
     if isinstance(data, list):
