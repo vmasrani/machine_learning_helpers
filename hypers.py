@@ -156,8 +156,5 @@ class Hypers:
 
     def parse_config_files(self, argv):
         configs = [f for f in argv if f.endswith(".py")]
-        other = [f for f in argv if not f.endswith(".py")]
-
-        print(f"Skipping: {other}")
-
+        # other = [f for f in argv if not f.endswith(".py")]
         return {} if is_notebook() else {file: read_config(file) for file in configs}
