@@ -36,6 +36,11 @@ from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
 
 persist_dir = Path('./.persistdir')
+
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
 old_merge_environment_settings = requests.Session.merge_environment_settings
 
 
