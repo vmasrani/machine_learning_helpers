@@ -1,4 +1,7 @@
 from __future__ import division, print_function
+import time
+from random import uniform
+from functools import wraps
 
 from ast import literal_eval
 import colorsys
@@ -10,7 +13,7 @@ import socket
 import ssl
 import subprocess
 import sys
-import time
+
 import warnings
 from collections import defaultdict
 from datetime import datetime
@@ -31,41 +34,42 @@ from sklearn import metrics
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
-from urllib3.exceptions import InsecureRequestWarning
 
 persist_dir = Path('./.persistdir')
 old_merge_environment_settings = requests.Session.merge_environment_settings
-ssl._create_default_https_context = ssl._create_unverified_context
-
-@contextlib.contextmanager
-def no_ssl_verification():
-    opened_adapters = set()
-
-    def merge_environment_settings(self, url, proxies, stream, verify, cert):
-        # Verification happens only once per connection so we need to close
-        # all the opened adapters once we're done. Otherwise, the effects of
-        # verify=False persist beyond the end of this context manager.
-        opened_adapters.add(self.get_adapter(url))
-
-        settings = old_merge_environment_settings(self, url, proxies, stream, verify, cert)
-        settings["verify"] = False
-
-        return settings
-
-    requests.Session.merge_environment_settings = merge_environment_settings
-
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", InsecureRequestWarning)
-            yield
-    finally:
-        requests.Session.merge_environment_settings = old_merge_environment_settings
-
-        for adapter in opened_adapters:
-            with contextlib.suppress(Exception):
-                adapter.close()
 
 
+def retry_with_backoff(max_retries=3, initial_delay=1):
+    """
+    Decorator that implements exponential backoff for rate limited API calls.
+
+    Args:
+        max_retries (int): Maximum number of retries before giving up
+        initial_delay (float): Initial delay in seconds before first retry
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retry_count += 1
+                    if "RATE_LIMIT_EXCEEDED" in str(e) and retry_count < max_retries:
+                        # Calculate exponential backoff delay with jitter
+                        delay = initial_delay * (2 ** (retry_count - 1))
+                        jitter = uniform(0, 0.1 * delay)
+                        time.sleep(delay + jitter)
+                    else:
+                        if retry_count == max_retries:
+                            print(f"Max retries ({max_retries}) reached. Last error: {e}")
+                            raise
+                        print(f"Error in {func.__name__}: {e}")
+                        raise
+            return None
+        return wrapper
+    return decorator
 
 
 def parse_str_to_json(data):
