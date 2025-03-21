@@ -174,21 +174,21 @@ def str_trim(df: pd.DataFrame, column_name: str, *args, **kwargs) -> pd.DataFram
     return df.assign(**{column_name: df[column_name].str.strip(*args, **kwargs)})
 
 
-@pf.register_dataframe_method
-def str_word(
-    df: pd.DataFrame,
-    column_name: str,
-    start: int = None,
-    stop: int = None,
-    pat: str = " ",
-    *args,
-    **kwargs
-):
-    """
-    Wrapper around `df.str.split` with additional `start` and `end` arguments
-    to select a slice of the list of words.
-    """
-    return df.assign(**{column_name: df[column_name].str.split(pat).str[start:stop]})
+# @pf.register_dataframe_method
+# def str_word(
+#     df: pd.DataFrame,
+#     column_name: str,
+#     start: int = None,
+#     stop: int = None,
+#     pat: str = " ",
+#     *args,
+#     **kwargs
+# ):
+#     """
+#     Wrapper around `df.str.split` with additional `start` and `end` arguments
+#     to select a slice of the list of words.
+#     """
+#     return df.assign(**{column_name: df[column_name].str.split(pat).str[start:stop]})
 
 
 @pf.register_dataframe_method
@@ -219,7 +219,7 @@ def str_split_select(
         stop = idx + 1
     names = [f'{name}_{i}' for i in range(idx, stop)]
     split_result = df[column_name].str.split(sep, expand=True).iloc[:, idx:stop]
-    new_df = df.assign(**{name: split_result[i] for i, name in enumerate(names)})
+    new_df = df.assign(**{name: split_result.iloc[:, i] for i, name in enumerate(names)})
     return new_df.drop(columns=[column_name]) if drop else new_df
 
 
