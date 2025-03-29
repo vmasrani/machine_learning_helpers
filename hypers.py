@@ -63,8 +63,13 @@ def read_config(file):
         raise ValueError(f"{file} is not a valid argument.") from exc
 
 
-def TBD():
-    return field(init=False, repr=False)  # pylint: disable=invalid-field-call
+def TBD(default=None):
+    if default is None:
+        return field(init=False, repr=False)  # pylint: disable=invalid-field-call
+    elif isinstance(default, list):
+        return field(default_factory=lambda: default, init=False, repr=False)  # pylint: disable=invalid-field-call
+    else:
+        return field(default=default, init=False, repr=False)  # pylint: disable=invalid-field-call
 
 
 def load_globals(file_vars, changed_args):

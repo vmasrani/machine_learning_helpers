@@ -443,16 +443,17 @@ def get_all_dirs(path):
     return [p for p in Path(path).glob("*") if p.is_dir()]
 
 
-def timeit(display=True):
+def timeit(message=None):
     def decorator(method):
         def timed(*args, **kw):
             ts = time.time()
             result = method(*args, **kw)
             te = time.time()
-            if display:
-                print(f'{method.__name__}:  {te - ts} s')
-                return result
-            return result, method.__name__, te - ts
+            if message:
+                print(f'{message}: {te - ts:.2f}s')
+            else:
+                print(f'{method.__name__}: {te - ts:.2f}s')
+            return result
         return timed
     return decorator
 
