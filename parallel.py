@@ -1,14 +1,26 @@
 from __future__ import annotations
+
 import contextlib
-import multiprocessing
+
 import time
+import warnings
+
 import joblib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    Progress,
+    MofNCompleteColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
+from rich.theme import Theme
 from sklearn.model_selection import GroupKFold
-from tqdm.auto import tqdm
-import warnings
+# from tqdm.auto import tqdm
 
 # Suppress specific FutureWarning about 'DataFrame.swapaxes'
 warnings.filterwarnings(
@@ -16,25 +28,26 @@ warnings.filterwarnings(
     message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
 )
 
+
 @contextlib.contextmanager
-def tqdm_joblib(tqdm_object):
-    # from https://stackoverflow.com/questions/24983493/tracking-progress-of-joblib-parallel-execution/49950707
-    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
-    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+def rich_joblib(progress, task_id):
+    """Context manager to patch joblib to report into rich progress bar"""
+    class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-
         def __call__(self, *args, **kwargs):
-            tqdm_object.update(n=self.batch_size)
+            progress.update(task_id, advance=self.batch_size)
             return super().__call__(*args, **kwargs)
-
     old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
     try:
-        yield tqdm_object
+        yield
     finally:
         joblib.parallel.BatchCompletionCallBack = old_batch_callback
-        tqdm_object.close()
+        progress.update(task_id, completed=progress.tasks[task_id].total)
+        progress.refresh()
+        progress.update(task_id, visible=False)
+
 
 
 def safe(f):
@@ -48,12 +61,68 @@ def safe(f):
     return wrapper
 
 
-def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, **kwargs):
-    arr = list(arr)  # convert generators to list so tqdm works
-    desc = kwargs.pop('desc', None)
+
+
+def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **kwargs):
+    arr = list(arr)  # convert generators to list so progress works
+    desc = kwargs.pop('desc', 'Processing')
+
+    if spawn:
+        import multiprocessing
+        multiprocessing.set_start_method('spawn', force=True)
+
+    # Add this configuration
+    # kwargs['mmap_mode'] = 'r+'  # Enable memory mapping for better performance
+
+    progress_bar = Progress(
+        TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        disable=disable_tqdm,
+        transient=kwargs.pop('transient', False),
+    )
+
     f = safe(f) if safe_mode else f
-    with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm, desc=desc)) as progress_bar:
-        return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
+
+    with progress_bar as progress:
+        task_id = progress.add_task(desc, total=len(arr))
+        with rich_joblib(progress, task_id):
+            return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
+
+
+
+# @contextlib.contextmanager
+# def tqdm_joblib(tqdm_object):
+#     # from https://stackoverflow.com/questions/24983493/tracking-progress-of-joblib-parallel-execution/49950707
+#     """Context manager to patch joblib to report into tqdm progress bar given as argument"""
+#     class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+#         def __init__(self, *args, **kwargs):
+#             super().__init__(*args, **kwargs)
+
+#         def __call__(self, *args, **kwargs):
+#             tqdm_object.update(n=self.batch_size)
+#             return super().__call__(*args, **kwargs)
+
+#     old_batch_callback = joblib.parallel.BatchCompletionCallBack
+#     joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+#     try:
+#         yield tqdm_object
+#     finally:
+#         joblib.parallel.BatchCompletionCallBack = old_batch_callback
+#         tqdm_object.close()
+
+
+
+# def pmap_old(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, **kwargs):
+#     arr = list(arr)  # convert generators to list so tqdm works
+#     desc = kwargs.pop('desc', None)
+#     f = safe(f) if safe_mode else f
+#     with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm, desc=desc)) as progress_bar:
+#         return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
 
 
 def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs):
@@ -67,8 +136,6 @@ def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs)
     df = pd.concat(pmap(f, df_split, safe_mode=safe_mode, **kwargs), axis=axis)
     return df
 
-# For long running jupyter cells
-
 
 def run_async(func):
     """
@@ -81,6 +148,7 @@ def run_async(func):
     #     return val
 
     """
+    import multiprocessing
     def func_with_queue(queue, *args, **kwargs):
         print(f'Running function {func.__name__}{args} {kwargs} ... ')
         start_time = time.perf_counter()

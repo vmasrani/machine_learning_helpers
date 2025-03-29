@@ -28,6 +28,7 @@ def _format_numeric_value(value, decimal_places, is_null_check=True):
     if isinstance(value, (int, float)):
         return f"{value:.{decimal_places}f}"
     return str(value)
+
 def _apply_decimal_formatting(df, decimals):
     """Apply decimal formatting to dataframe columns.
     Args:
@@ -65,7 +66,7 @@ def _get_styled_value(value, col_name, dynamic_color_cols, style):
     Returns:
         str or Text: Styled value
     """
-    from rich.text import Text
+
     # Convert to string if not already
     str_value = str(value)
     # Apply dynamic coloring if column is in the list
