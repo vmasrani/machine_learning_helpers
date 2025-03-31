@@ -1,56 +1,135 @@
 from __future__ import annotations
 
 import contextlib
-
 import time
-import warnings
-
-import joblib
+from typing import Any, Callable, Iterable
+import threading
+import multiprocessing
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
-from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    MofNCompleteColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
-from rich.theme import Theme
 from sklearn.model_selection import GroupKFold
-# from tqdm.auto import tqdm
 
-# Suppress specific FutureWarning about 'DataFrame.swapaxes'
-warnings.filterwarnings(
-    "ignore",
-    message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
+from rich.live import Live
+from rich.table import Table
+from joblib import Parallel, delayed
+import joblib
+from progress_styles import (
+    create_progress_columns,
+    create_progress_table,
+    make_job_description,
 )
+from rich.text import Text
 
 
 @contextlib.contextmanager
-def rich_joblib(progress, task_id):
-    """Context manager to patch joblib to report into rich progress bar"""
+def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, overall_progress_task_id, total_cpus):
+    """Enhanced context manager for joblib with styled progress bars."""
     class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        _job_counter = 0
+        _job_counter_lock = threading.Lock()
+        _completed_tasks = 0  # Track completed tasks
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
+            self.start_time = time.time()
+            self.first_batch = True
+            self.completed_jobs = 0
+            self.active_jobs = {}
+            self.max_visible_jobs = 10
+            self.avg_job_time = None
+
+            self._stop_event = threading.Event()
+            self._thread = threading.Thread(target=self._update_progress)
+            self._thread.daemon = True
+            self._thread.start()
+
+        @classmethod
+        def get_next_job_number(cls):
+            with cls._job_counter_lock:
+                cls._job_counter += 1
+                return cls._job_counter
+
+        @property
+        def active_jobs_count(self):
+            return len(self.active_jobs)
+
+        def _update_progress(self):
+            """Update progress of active jobs in a separate thread."""
+            while not self._stop_event.is_set():
+                if self.avg_job_time:
+                    current_time = time.time()
+                    for job_idx, (job_task_id, start_time, _) in list(self.active_jobs.items()):
+                        elapsed = current_time - start_time
+                        progress = min(99, int(100 * elapsed / self.avg_job_time))
+                        if progress >= 99:  # Job is nearly complete
+                            job_progress.remove_task(job_task_id)
+                            self.active_jobs.pop(job_idx)
+                            self.__class__._completed_tasks += 1  # Increment completed tasks when job ends
+                        else:
+                            job_progress.update(job_task_id, completed=progress)
+                    job_progress.refresh()
+                time.sleep(0.1)
+
         def __call__(self, *args, **kwargs):
-            progress.update(task_id, advance=self.batch_size)
+            current_time = time.time()
+
+            if self.first_batch and self.batch_size > 0:
+                elapsed = current_time - self.start_time
+                self.avg_job_time = elapsed / self.batch_size
+                job_progress.update(overall_job_task_id, total=job_progress.tasks[overall_job_task_id].total)
+                overall_progress.update(overall_progress_task_id, total=job_progress.tasks[overall_progress_task_id].total)
+                self.first_batch = False
+
+            # Update active jobs
+            for job_idx in list(self.active_jobs.keys()):
+                if job_idx < self.completed_jobs:
+                    job_task_id, _, _ = self.active_jobs.pop(job_idx)
+                    job_progress.remove_task(job_task_id)
+
+            # Add new job with styled description
+            new_job_idx = self.completed_jobs
+            job_number = self.get_next_job_number()
+
+            new_job_task_id = job_progress.add_task(
+                make_job_description(job_number, total_cpus, self.active_jobs_count + 1),
+                total=100,
+                completed=0
+            )
+            self.active_jobs[new_job_idx] = (new_job_task_id, current_time, job_number)
+
+            # Update progress
+            job_progress.update(overall_job_task_id, advance=self.batch_size)
+            overall_progress.update(overall_progress_task_id, advance=self.batch_size)
+
+            self.completed_jobs += self.batch_size
             return super().__call__(*args, **kwargs)
+
+        def stop(self):
+            self._stop_event.set()
+            self._thread.join(timeout=1.0)
+
+    callback = RichBatchCompletionCallback
     old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
+    current_callback_instance = None
+
+    class WrappedCallback(callback):
+        def __init__(self, *args, **kwargs):
+            nonlocal current_callback_instance
+            super().__init__(*args, **kwargs)
+            current_callback_instance = self
+
+    joblib.parallel.BatchCompletionCallBack = WrappedCallback
     try:
         yield
     finally:
+        if current_callback_instance is not None:
+            current_callback_instance.stop()
         joblib.parallel.BatchCompletionCallBack = old_batch_callback
-        progress.update(task_id, completed=progress.tasks[task_id].total)
-        progress.refresh()
-        progress.update(task_id, visible=False)
+        job_progress.update(overall_job_task_id, completed=job_progress.tasks[overall_job_task_id].total)
+        overall_progress.update(overall_progress_task_id, completed=overall_progress.tasks[overall_progress_task_id].total)
 
 
-
-def safe(f):
+def safe(f: Callable) -> Callable:
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
@@ -61,37 +140,158 @@ def safe(f):
     return wrapper
 
 
-
-
-def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **kwargs):
-    arr = list(arr)  # convert generators to list so progress works
+def pmap(
+    f: Callable,
+    arr: Iterable[Any],
+    n_jobs: int = -1,
+    disable_tqdm: bool = False,
+    safe_mode: bool = False,
+    spawn: bool = False,
+    **kwargs
+) -> list:
+    """Parallel map with styled progress bars and CPU usage information."""
+    arr = list(arr)
     desc = kwargs.pop('desc', 'Processing')
+    total_tasks = len(arr)
+
+    if n_jobs == -1:
+        n_jobs = multiprocessing.cpu_count()
+    total_cpus = min(n_jobs, total_tasks)
 
     if spawn:
-        import multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
-
-    # Add this configuration
-    # kwargs['mmap_mode'] = 'r+'  # Enable memory mapping for better performance
-
-    progress_bar = Progress(
-        TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("•"),
-        TimeElapsedColumn(),
-        TextColumn("•"),
-        TimeRemainingColumn(),
-        disable=disable_tqdm,
-        transient=kwargs.pop('transient', False),
-    )
 
     f = safe(f) if safe_mode else f
 
-    with progress_bar as progress:
-        task_id = progress.add_task(desc, total=len(arr))
-        with rich_joblib(progress, task_id):
-            return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
+    # Create styled progress bars
+    job_progress, overall_progress = create_progress_columns(disable_tqdm)
+
+    # Add tasks with styled descriptions
+    task_id = job_progress.add_task(desc, total=total_tasks)
+    overall_task_id = overall_progress.add_task(
+        Text.assemble(("", "dim blue"), (" Total", "bold white")),
+        total=total_tasks
+    )
+
+    # Track completed tasks
+    completed_tasks = 0
+
+    def update_progress_table():
+        return create_progress_table(
+            job_progress,
+            overall_progress,
+            total_cpus,
+            completed_tasks,
+            total_tasks
+        )
+
+    with Live(update_progress_table(), refresh_per_second=10, transient=False) as live:
+        with rich_joblib_adaptive(job_progress, overall_progress, task_id, overall_task_id, total_cpus):
+            results = Parallel(n_jobs=n_jobs, **kwargs)(
+                delayed(f)(i) for i in arr
+            )
+            # Update completed tasks for final display
+            completed_tasks = total_tasks
+            live.update(update_progress_table())
+
+    return results
+
+
+
+# from __future__ import annotations
+
+# import contextlib
+
+# import time
+# import warnings
+
+# import joblib
+# import numpy as np
+# import pandas as pd
+# from joblib import Parallel, delayed
+# from rich.console import Console
+# from rich.progress import (
+#     BarColumn,
+#     Progress,
+#     MofNCompleteColumn,
+#     TextColumn,
+#     TimeElapsedColumn,
+#     TimeRemainingColumn,
+# )
+# from rich.theme import Theme
+# from sklearn.model_selection import GroupKFold
+# # from tqdm.auto import tqdm
+
+# # Suppress specific FutureWarning about 'DataFrame.swapaxes'
+# warnings.filterwarnings(
+#     "ignore",
+#     message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
+# )
+
+
+# @contextlib.contextmanager
+# def rich_joblib(progress, task_id):
+#     """Context manager to patch joblib to report into rich progress bar"""
+#     class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+#         def __init__(self, *args, **kwargs):
+#             super().__init__(*args, **kwargs)
+#         def __call__(self, *args, **kwargs):
+#             progress.update(task_id, advance=self.batch_size)
+#             return super().__call__(*args, **kwargs)
+#     old_batch_callback = joblib.parallel.BatchCompletionCallBack
+#     joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
+#     try:
+#         yield
+#     finally:
+#         joblib.parallel.BatchCompletionCallBack = old_batch_callback
+#         progress.update(task_id, completed=progress.tasks[task_id].total)
+#         progress.refresh()
+#         progress.update(task_id, visible=False)
+
+
+
+# def safe(f):
+#     def wrapper(*args, **kwargs):
+#         try:
+#             return f(*args, **kwargs)
+#         except Exception as e:
+#             error_dict = {'error': str(e), 'args': args, 'kwargs': kwargs}
+#             print(error_dict)
+#             return error_dict
+#     return wrapper
+
+
+
+
+# def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **kwargs):
+#     arr = list(arr)  # convert generators to list so progress works
+#     desc = kwargs.pop('desc', 'Processing')
+
+#     if spawn:
+#         import multiprocessing
+#         multiprocessing.set_start_method('spawn', force=True)
+
+#     # Add this configuration
+#     # kwargs['mmap_mode'] = 'r+'  # Enable memory mapping for better performance
+
+#     progress_bar = Progress(
+#         TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
+#         BarColumn(),
+#         MofNCompleteColumn(),
+#         TextColumn("•"),
+#         TimeElapsedColumn(),
+#         TextColumn("•"),
+#         TimeRemainingColumn(),
+#         disable=disable_tqdm,
+#         transient=kwargs.pop('transient', False),
+#     )
+
+#     f = safe(f) if safe_mode else f
+
+#     with progress_bar as progress:
+#         task_id = progress.add_task(desc, total=len(arr))
+#         with rich_joblib(progress, task_id):
+#             return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
 
 
 
