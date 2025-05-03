@@ -135,8 +135,6 @@ class Hypers:
     def _all_variables(self):
         return [n for n in self.__class__.__dict__ if not n.startswith("_")]
 
-    def _all_fields(self) -> List[Field[Any]]:
-        return list(filter(lambda f: f.init, fields(self)))
 
     def _raise_untyped(self):
         all_vars = set(self._all_variables())
@@ -146,6 +144,8 @@ class Hypers:
             raise ValueError(
                 f"Variables missing type annotations: {', '.join(untyped_vars)}"
             )
+    def _all_fields(self) -> List[Field[Any]]:
+        return list(filter(lambda f: f.init, fields(self)))
 
     def get(self, name):
         return getattr(self, name)

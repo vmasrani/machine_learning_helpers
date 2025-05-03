@@ -21,7 +21,7 @@ from functools import singledispatch
 from pathlib import Path
 from pprint import pprint
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Dict, List
 
 import janitor
 import joblib
@@ -84,6 +84,24 @@ def parse_str_to_json(data):
     data = data.replace("'", '"').replace("None", "null").replace("True", "true").replace("False", "false")
     return json.loads(data)
 
+def merge_dicts(dicts_list: List[Dict]) -> Dict:
+    merged = defaultdict(list)
+    remove_nones = lambda x: [i for i in x if i is not None]
+
+    def tidy(x):
+        val = list(set(flatten(remove_nones(x))))
+        if len(val) == 1:
+            return val[0]
+        elif not val:
+            return None
+        else:
+            return val
+
+    for t in dicts_list:
+        for k, v in t.items():
+            merged[k].append(v)
+
+    return {k: tidy(v) for k, v in merged.items()}
 
 
 def nested_dict():
