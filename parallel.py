@@ -32,13 +32,32 @@ from progress_styles import (
     make_job_description,
 )
 
-# from tqdm.auto import tqdm
-
 # Suppress specific FutureWarning about 'DataFrame.swapaxes'
 warnings.filterwarnings(
     "ignore",
     message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
 )
+
+
+
+@contextlib.contextmanager
+def rich_joblib(progress, task_id):
+    """Context manager to patch joblib to report into rich progress bar"""
+    class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+        def __call__(self, *args, **kwargs):
+            progress.update(task_id, advance=self.batch_size)
+            return super().__call__(*args, **kwargs)
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
+    try:
+        yield
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        progress.update(task_id, completed=progress.tasks[task_id].total)
+        progress.refresh()
+        progress.update(task_id, visible=False)
 
 
 @contextlib.contextmanager
@@ -217,29 +236,6 @@ def pmap_multi(
     return results
 
 
-
-
-
-@contextlib.contextmanager
-def rich_joblib(progress, task_id):
-    """Context manager to patch joblib to report into rich progress bar"""
-    class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-        def __call__(self, *args, **kwargs):
-            progress.update(task_id, advance=self.batch_size)
-            return super().__call__(*args, **kwargs)
-    old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
-    try:
-        yield
-    finally:
-        joblib.parallel.BatchCompletionCallBack = old_batch_callback
-        progress.update(task_id, completed=progress.tasks[task_id].total)
-        progress.refresh()
-        progress.update(task_id, visible=False)
-
-
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **kwargs):
     arr = list(arr)  # convert generators to list so progress works
     desc = kwargs.pop('desc', 'Processing')
@@ -247,9 +243,6 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
     if spawn:
         import multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
-
-    # Add this configuration
-    # kwargs['mmap_mode'] = 'r+'  # Enable memory mapping for better performance
 
     progress_bar = Progress(
         TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
@@ -269,38 +262,6 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
         task_id = progress.add_task(desc, total=len(arr))
         with rich_joblib(progress, task_id):
             return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
-
-
-
-# @contextlib.contextmanager
-# def tqdm_joblib(tqdm_object):
-#     # from https://stackoverflow.com/questions/24983493/tracking-progress-of-joblib-parallel-execution/49950707
-#     """Context manager to patch joblib to report into tqdm progress bar given as argument"""
-#     class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
-#         def __init__(self, *args, **kwargs):
-#             super().__init__(*args, **kwargs)
-
-#         def __call__(self, *args, **kwargs):
-#             tqdm_object.update(n=self.batch_size)
-#             return super().__call__(*args, **kwargs)
-
-#     old_batch_callback = joblib.parallel.BatchCompletionCallBack
-#     joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
-#     try:
-#         yield tqdm_object
-#     finally:
-#         joblib.parallel.BatchCompletionCallBack = old_batch_callback
-#         tqdm_object.close()
-
-
-
-# def pmap_old(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, **kwargs):
-#     arr = list(arr)  # convert generators to list so tqdm works
-#     desc = kwargs.pop('desc', None)
-#     f = safe(f) if safe_mode else f
-#     with tqdm_joblib(tqdm(total=len(arr), disable=disable_tqdm, desc=desc)) as progress_bar:
-#         return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
-
 
 def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs):
     # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1

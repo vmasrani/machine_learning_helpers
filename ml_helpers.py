@@ -42,7 +42,6 @@ def chunks(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
-old_merge_environment_settings = requests.Session.merge_environment_settings
 
 
 def retry_with_backoff(max_retries=3, initial_delay=1):
