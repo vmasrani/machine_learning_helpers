@@ -1,0 +1,22 @@
+[project]
+name = "machine-learning-helpers"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ipython>=9.2.0",
+    "joblib>=1.5.0",
+    "matplotlib>=3.10.1",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pandas-flavor>=0.7.0",
+    "polars>=1.29.0",
+    "pyjanitor>=0.31.0",
+    "requests>=2.32.3",
+    "rich>=14.0.0",
+    "scikit-learn>=1.6.1",
+    "seaborn>=0.13.2",
+    "torch>=2.7.0",
+    "tqdm>=4.67.1",
+]
