@@ -26,7 +26,7 @@ from rich.text import Text
 from rich.theme import Theme
 from sklearn.model_selection import GroupKFold
 
-from progress_styles import (
+from .progress_styles import (
     create_progress_columns,
     create_progress_table,
     make_job_description,

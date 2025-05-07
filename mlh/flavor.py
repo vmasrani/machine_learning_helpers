@@ -8,7 +8,7 @@ import pandas_flavor as pf
 import numpy as np
 import polars as pl
 import janitor
-from ml_helpers import parse_str_to_json
+from .ml_helpers import parse_str_to_json
 
 # #define and register your custom functionality
 # @pl.api.register_expr_namespace('custom')

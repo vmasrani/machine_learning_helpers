@@ -1,5 +1,7 @@
-from parallel import pmap
 from time import sleep
+import pandas as pd
+from mlh.parallel import pmap
+from mlh import flavor
 
 
 def sleep_1s(x):
@@ -7,9 +9,9 @@ def sleep_1s(x):
     return x
 
 
-def main():
-    print("Hello from machine-learning-helpers!")
-    pmap(sleep_1s, [1, 2, 3])
+pmap(sleep_1s, range(10))
 
-if __name__ == "__main__":
-    main()
+
+df = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})
+
+
