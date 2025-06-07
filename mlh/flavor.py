@@ -2,7 +2,7 @@ import ast
 import contextlib
 from filecmp import cmp
 import json
-from parallel import pmap_df
+from .parallel import pmap_df
 import pandas as pd
 import pandas_flavor as pf
 import numpy as np
