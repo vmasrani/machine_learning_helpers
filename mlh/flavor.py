@@ -1,5 +1,6 @@
 import ast
 import contextlib
+from rapidfuzz import fuzz
 from filecmp import cmp
 import json
 from .parallel import pmap_df
@@ -65,6 +66,13 @@ from .ml_helpers import parse_str_to_json
 #                 return ast.literal_eval(formatted_string)
 #     # Return the value as is if it doesn't match any of the above conditions
 #     return value
+
+
+
+@pf.register_dataframe_method
+def fuzzy_filter(df: pd.DataFrame, column_name: str, query: str, threshold: int) -> pd.DataFrame:
+    df['score'] = df[column_name].apply(lambda x: fuzz.token_set_ratio(query, x))
+    return df[df['score'] >= threshold].sort_values('score', ascending=False)
 
 
 @pf.register_dataframe_method
