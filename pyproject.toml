@@ -6,8 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "certifi>=2023.7.22",
+    "ipykernel>=6.29.5",
     "ipython>=8.0.0",
     "joblib>=1.2.0",
+    "jsonpath-ng>=1.7.0",
     "matplotlib>=3.5.0",
     "numpy>=1.21.0",
     "pandas>=1.4.0",

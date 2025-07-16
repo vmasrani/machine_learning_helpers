@@ -27,6 +27,7 @@ from sklearn import metrics
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm.auto import tqdm
+from jsonpath_ng import parse
 
 persist_dir = Path('./.persistdir')
 
@@ -35,6 +36,12 @@ def chunks(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
 
+
+def deepsearch(data, key):
+    # use jsonpath_ng to find all instances of the key in the data,
+    # however deeply nested the key is
+    for item in parse(f'$..{key}').find(data):
+        yield item.value
 
 
 def retry_with_backoff(max_retries=3, initial_delay=1):
