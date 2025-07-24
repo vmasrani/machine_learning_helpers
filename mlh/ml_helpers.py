@@ -539,3 +539,4 @@ def fast_csv_sample(csv_path):
     command = f"grep -m 1 \"^$(shuf -i 0-$(tail -n 1 {csv_path} | grep -o '^[^,]*') -n 1),\" {csv_path}"
     result = run_bash_command(command)
     return [str_to_py(r) for r in str_to_py(result)[1:]]
+
