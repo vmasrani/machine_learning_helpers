@@ -106,6 +106,10 @@ def json_normalize_dataframe(df):
     json_str = df.unwrap_dict_in_list().to_json(orient='records')
     return pd.json_normalize(json.loads(json_str))
 
+@pf.register_dataframe_method
+def yank(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    return df.set_index(col).reset_index()
+
 
 # @pf.register_dataframe_method
 # def convert_to_structure(df, cols=None):
