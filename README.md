@@ -1,5 +1,13 @@
 # A bunch of helper functions for machine learning
 An assortment of helper functions for machine learning. Heavily overfit to my coding idiosyncrasies, and meant to be used in conjunction with my [project template](https://github.com/vmasrani/ml_project_skeleton).
+
+## Installation
+
+The base package installs the shared helpers (including `mlh.hypers`) without PyTorch. Install via `pip install machine-learning-helpers` or include the git dependency in a `uv` script without extra flags. Only the modules that rely on PyTorch need it:
+
+- Install with PyTorch helpers when needed: `pip install machine-learning-helpers[torch]`.
+- Importing `mlh.torch_helpers` or other torch-based utilities without the extra will raise an `ImportError` explaining that `torch` is required.
+
 To have these helpers be globally available for all your projects, create a hidden directory in home (i.e. `~/.python`) and set your `PYTHONPATH` in your bashrc via:
 
 `export PYTHONPATH=~/.python:$PYTHONPATH`
@@ -61,4 +69,3 @@ The logic of `job_submitter.py` is broken into a few components, each of which s
         ```
         **Modify line 209 for a different python command**. The second produces the slurm command itself and shouldn't need to be modified.
   5. Finally, in `make_bash_script()`, a bash script `submit.sh` is made and saved using a prewritten template in `static.py` and the previously made python command.  **Modify make_bash_script() and static.py for different slurm configurations**. Line 79 actually calls the bash command. `submit.sh` is rewritten each time to prevent a buildup of submit.sh files, but if just want to make them then submit them yourself for debugging purposes, use the `manual_mode=True` flag.
-

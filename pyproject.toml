@@ -21,6 +21,8 @@ dependencies = [
     "rich>=12.0.0",
     "scikit-learn>=1.0.0",
     "seaborn>=0.11.2",
-    "torch>=1.12.0",
     "tqdm>=4.64.0",
 ]
+
+[project.optional-dependencies]
+torch = ["torch>=1.12.0"]

@@ -7,8 +7,13 @@ from collections import defaultdict, deque
 from datetime import timedelta
 
 import numpy as np
-import torch
-from torch import inf
+
+try:
+    import torch
+    from torch import inf
+except ImportError:  # torch is optional; fall back for non-torch use cases
+    torch = None
+    from math import inf
 from tqdm import tqdm
 
 
@@ -154,7 +159,7 @@ class MetricLogger(object):
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
-            if isinstance(v, torch.Tensor):
+            if torch is not None and isinstance(v, torch.Tensor):
                 v = v.item()
             assert isinstance(v, (float, int)), f"{k} is of type {type(v)}"
             self.meters[k].update(v)
