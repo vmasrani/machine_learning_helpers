@@ -182,11 +182,11 @@ def scale(x, out_range=(-1, 1)):
     return y * (out_range[1] - out_range[0]) + (out_range[1] + out_range[0]) / 2
 
 
-def hits_and_misses(y_hat, y_testing):
-    tp = sum(y_hat + y_testing > 1)
-    tn = sum(y_hat + y_testing == 0)
-    fp = sum(y_hat - y_testing > 0)
-    fn = sum(y_testing - y_hat > 0)
+def hits_and_misses(labels, preds):
+    tp = sum(preds + labels > 1)
+    tn = sum(preds + labels == 0)
+    fp = sum(preds - labels > 0)
+    fn = sum(labels - preds > 0)
     return tp, tn, fp, fn
 
 
@@ -216,7 +216,7 @@ def classification_metrics(labels, preds):
         "f1": float(f1),
         "sensitivity": float(sensitivity),
         "specificity": float(specificity),
-        'acc': accuracy_score(preds, labels),
+        'acc': accuracy_score(labels, preds),
     }
 
 
