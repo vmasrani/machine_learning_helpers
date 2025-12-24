@@ -38,7 +38,7 @@ def chunks(lst, n):
 
 
 def deepsearch(data, key):
-    # use jsonpath_ng to find all instances of the key in the data,
+    # we should use jsonpath_ng to find all instances of the key in the data,
     # however deeply nested the key is
     for item in parse(f'$..{key}').find(data):
         yield item.value
