@@ -1,11 +1,10 @@
 import ast
-import pandas as pd
-from sqlalchemy import inspect
 import contextlib
 from rapidfuzz import fuzz
 from filecmp import cmp
 import json
 from .parallel import pmap_df
+import pandas as pd
 import pandas_flavor as pf
 import numpy as np
 import polars as pl
@@ -67,94 +66,6 @@ from .ml_helpers import parse_str_to_json
 #                 return ast.literal_eval(formatted_string)
 #     # Return the value as is if it doesn't match any of the above conditions
 #     return value
-
-@pf.register_dataframe_method
-def append_df_aligned(
-    df: pd.DataFrame,
-    table: str,
-    engine,
-    *,
-    chunksize: int = 10_000,
-    method: str = "multi",
-) -> int:
-    """
-    Append a DataFrame to an existing PostgreSQL table, aligning columns:
-      - Adds NA for any table columns missing in df
-      - Keeps all df columns (extra columns are ignored)
-      - Reorders to match table column order for insertion
-      - Creates table if it doesn't exist
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Source data.
-    table : str
-        Target table. Accepts "schema.table" or "table".
-    engine : sqlalchemy.Engine | sqlalchemy.Connection
-        SQLAlchemy engine/connection to the target database.
-    chunksize : int
-        Rows per batch for to_sql.
-    method : str
-        to_sql insert method. "multi" groups many rows per INSERT.
-
-    Returns
-    -------
-    int
-        Number of rows appended.
-    """
-    # Parse schema.table
-    if "." in table and not table.strip().startswith('"'):
-        schema, tbl = table.split(".", 1)
-    else:
-        schema, tbl = None, table
-
-    insp = inspect(engine)
-
-    # Check if table exists
-    table_exists = insp.has_table(tbl, schema=schema)
-
-    if not table_exists:
-        # Table doesn't exist, create it with the DataFrame structure
-        df = df.copy()
-        df.columns = [str(c) for c in df.columns]
-
-        df.to_sql(
-            name=tbl,
-            con=engine,
-            schema=schema,
-            if_exists="replace",
-            index=False,
-            chunksize=chunksize,
-            method=method,
-        )
-    else:
-        # Table exists, align columns and append
-        cols_meta = insp.get_columns(tbl, schema=schema)
-        target_cols = [c["name"] for c in cols_meta]
-
-        df = df.copy()
-        df.columns = [str(c) for c in df.columns]
-
-        # Add NA for any missing table columns
-        for c in target_cols:
-            if c not in df.columns:
-                df[c] = pd.NA
-
-        # Reorder to match table columns
-        df_aligned = df[target_cols]
-
-        # Append to existing table
-        df_aligned.to_sql(
-            name=tbl,
-            con=engine,
-            schema=schema,
-            if_exists="append",
-            index=False,
-            chunksize=chunksize,
-            method=method,
-        )
-
-    return len(df)
 
 
 

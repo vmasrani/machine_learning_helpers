@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import multiprocessing
+import sys
 import threading
 import time
 import warnings
+from queue import Queue
 from typing import Any, Callable, Iterable
 
 import joblib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.progress import (
     BarColumn,
@@ -41,14 +44,26 @@ warnings.filterwarnings(
 
 
 @contextlib.contextmanager
-def rich_joblib(progress, task_id):
-    """Context manager to patch joblib to report into rich progress bar"""
+def rich_joblib(progress, task_id, live=None):
+    """Context manager to patch joblib to report into rich progress bar and capture outputs"""
     class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-        def __call__(self, *args, **kwargs):
+        def __call__(self, out):
+            # Extract outputs and print them above the live display
+            if live is not None and out is not None:
+                try:
+                    batch_results = out.result()
+                    for result, output in batch_results:
+                        if output:
+                            # Use live.console.print() to print above the progress bar
+                            live.console.print(output, style="dim cyan")
+                except Exception:
+                    # If extraction fails, just skip (progress bar will still work)
+                    pass
+
             progress.update(task_id, advance=self.batch_size)
-            return super().__call__(*args, **kwargs)
+            return super().__call__(out)
     old_batch_callback = joblib.parallel.BatchCompletionCallBack
     joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
     try:
@@ -179,6 +194,18 @@ def safe(f: Callable) -> Callable:
     return wrapper
 
 
+def _capture_stdout_wrapper(f: Callable) -> Callable:
+    """Wrapper that captures stdout from function f and returns (result, output)."""
+    def wrapper(*args, **kwargs):
+        stdout_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer):
+            result = f(*args, **kwargs)
+
+        output = stdout_buffer.getvalue().rstrip()
+        return (result, output)
+    return wrapper
+
+
 def pmap_multi(
     f: Callable,
     arr: Iterable[Any],
@@ -241,8 +268,12 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
     desc = kwargs.pop('desc', 'Processing')
 
     if spawn:
-        import multiprocessing
         multiprocessing.set_start_method('spawn', force=True)
+
+    f = safe(f) if safe_mode else f
+    f_wrapped = _capture_stdout_wrapper(f)
+
+    console = Console()
 
     progress_bar = Progress(
         TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
@@ -256,12 +287,15 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
         transient=kwargs.pop('transient', False),
     )
 
-    f = safe(f) if safe_mode else f
+    with Live(progress_bar, console=console, refresh_per_second=10) as live:
+        task_id = progress_bar.add_task(desc, total=len(arr))
+        with rich_joblib(progress_bar, task_id, live):
+            results_with_output = Parallel(n_jobs=n_jobs, **kwargs)(delayed(f_wrapped)(i) for i in arr)
 
-    with progress_bar as progress:
-        task_id = progress.add_task(desc, total=len(arr))
-        with rich_joblib(progress, task_id):
-            return Parallel(n_jobs=n_jobs, **kwargs)(delayed(f)(i) for i in arr)
+        # Separate results from outputs
+        results = [result for result, output in results_with_output]
+
+    return results
 
 def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs):
     # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
