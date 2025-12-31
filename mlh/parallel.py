@@ -96,14 +96,18 @@ def safe(f: Callable) -> Callable:
 
 
 def _capture_stdout_wrapper(f: Callable) -> Callable:
-    """Wrapper that captures stdout from function f and returns (result, output)."""
+    """Wrapper that captures stdout and stderr from function f and returns (result, output)."""
     def wrapper(*args, **kwargs):
         stdout_buffer = io.StringIO()
-        with contextlib.redirect_stdout(stdout_buffer):
+        stderr_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
             result = f(*args, **kwargs)
 
-        output = stdout_buffer.getvalue().rstrip()
-        return (result, output)
+        # Combine stdout and stderr, with stderr warnings going first if present
+        stderr_output = stderr_buffer.getvalue().rstrip()
+        stdout_output = stdout_buffer.getvalue().rstrip()
+        combined_output = '\n'.join(filter(None, [stderr_output, stdout_output]))
+        return (result, combined_output)
     return wrapper
 
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, batch_size='auto', **kwargs):
