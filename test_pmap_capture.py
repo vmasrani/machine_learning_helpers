@@ -16,7 +16,7 @@ from mlh.parallel import pmap
 def process_with_prints(i):
     """Function with print statements that would normally interfere with progress bar."""
     print(f"Processing item {i}")
-    time.sleep(0.15)
+    time.sleep(0.05)
     if i % 3 == 0:
         print(f"  -> Item {i} is divisible by 3!")
     return i * 2
