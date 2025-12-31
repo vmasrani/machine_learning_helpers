@@ -38,17 +38,21 @@ from .progress_styles import (
 # Suppress specific FutureWarning about 'DataFrame.swapaxes'
 warnings.filterwarnings(
     "ignore",
-    message="'DataFrame.swapaxes' is deprecated and will be removed in a future version. Please use 'DataFrame.transpose' instead."
+    category=FutureWarning,
+    message="'DataFrame.swapaxes' is deprecated.*"
 )
 
+# Progress bar refresh rate (Hz) - tuned to prevent flickering
+DEFAULT_REFRESH_RATE = 6
+
+# Thread polling interval for progress updates (seconds)
+PROGRESS_POLL_INTERVAL = 0.1
 
 
 @contextlib.contextmanager
 def rich_joblib(progress, task_id, live=None):
     """Context manager to patch joblib to report into rich progress bar and capture outputs"""
     class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
         def __call__(self, out):
             # Extract outputs and print them above the live display
             if live is not None and out is not None:
@@ -59,10 +63,12 @@ def rich_joblib(progress, task_id, live=None):
                             # Use live.console.print() to print above the progress bar
                             live.console.print(output, style="dim cyan")
                 except Exception:
-                    # If extraction fails, just skip (progress bar will still work)
+                    # Silently skip if stdout extraction fails - progress tracking continues
                     pass
 
             progress.update(task_id, advance=self.batch_size)
+            if live is not None:
+                live.refresh()
             return super().__call__(out)
     old_batch_callback = joblib.parallel.BatchCompletionCallBack
     joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
@@ -122,7 +128,7 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
                         else:
                             job_progress.update(job_task_id, completed=progress)
                     job_progress.refresh()
-                time.sleep(0.1)
+                time.sleep(PROGRESS_POLL_INTERVAL)
 
         def __call__(self, *args, **kwargs):
             current_time = time.time()
@@ -184,13 +190,17 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
 
 
 def safe(f: Callable) -> Callable:
+    """Wrap function to catch exceptions and return error dict instead of raising."""
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
         except Exception as e:
-            error_dict = {'error': str(e), 'args': args, 'kwargs': kwargs}
-            print(error_dict)
-            return error_dict
+            return {
+                'error': str(e),
+                'error_type': type(e).__name__,
+                'args': args,
+                'kwargs': kwargs
+            }
     return wrapper
 
 
@@ -251,7 +261,7 @@ def pmap_multi(
             total_tasks
         )
 
-    with Live(update_progress_table(), refresh_per_second=10, transient=False) as live:
+    with Live(update_progress_table(), refresh_per_second=DEFAULT_REFRESH_RATE, transient=False) as live:
         with rich_joblib_adaptive(job_progress, overall_progress, task_id, overall_task_id, total_cpus):
             results = Parallel(n_jobs=n_jobs, **kwargs)(
                 delayed(f)(i) for i in arr
@@ -264,7 +274,7 @@ def pmap_multi(
 
 
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **kwargs):
-    arr = list(arr)  # convert generators to list so progress works
+    arr = list(arr)  # Convert generators to list for progress tracking.
     desc = kwargs.pop('desc', 'Processing')
 
     if spawn:
@@ -287,7 +297,7 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
         transient=kwargs.pop('transient', False),
     )
 
-    with Live(progress_bar, console=console, refresh_per_second=10) as live:
+    with Live(progress_bar, console=console, refresh_per_second=DEFAULT_REFRESH_RATE) as live:
         task_id = progress_bar.add_task(desc, total=len(arr))
         with rich_joblib(progress_bar, task_id, live):
             results_with_output = Parallel(n_jobs=n_jobs, **kwargs)(delayed(f_wrapped)(i) for i in arr)
@@ -297,7 +307,15 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, **
 
     return results
 
-def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs):
+def pmap_df(
+    f: Callable,
+    df: pd.DataFrame,
+    n_chunks: int = 100,
+    groups: str | None = None,
+    axis: int = 0,
+    safe_mode: bool = False,
+    **kwargs
+) -> pd.DataFrame:
     # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
     if groups:
         n_chunks = min(n_chunks, df[groups].nunique())
@@ -310,15 +328,18 @@ def pmap_df(f, df, n_chunks=100, groups=None, axis=0, safe_mode=False, **kwargs)
 
 
 def run_async(func):
-    """
-    # example
-    # @run_async
-    # def long_run(idx, val='cat'):
-    #     for i in range(idx):
-    #         print(i)
-    #         time.sleep(1)
-    #     return val
+    """Run function asynchronously and return a queue for retrieving results.
 
+    Example:
+        @run_async
+        def long_run(idx, val='cat'):
+            for i in range(idx):
+                print(i)
+                time.sleep(1)
+            return val
+
+        queue = long_run(5, val='dog')
+        result = queue.get()
     """
     import multiprocessing
     def func_with_queue(queue, *args, **kwargs):
