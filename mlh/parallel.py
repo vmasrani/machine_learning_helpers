@@ -7,26 +7,16 @@ import sys
 import threading
 import time
 import warnings
-from queue import Queue
 from typing import Any, Callable, Iterable
 
 import joblib
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from rich.console import Console, Group
+from rich.console import Console
 from rich.live import Live
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
-from rich.table import Table
+from rich.progress import Progress, BarColumn, MofNCompleteColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.text import Text
-from rich.theme import Theme
 from sklearn.model_selection import GroupKFold
 
 from .progress_styles import (
@@ -43,40 +33,11 @@ warnings.filterwarnings(
 )
 
 # Progress bar refresh rate (Hz) - tuned to prevent flickering
-DEFAULT_REFRESH_RATE = 4*4
+DEFAULT_REFRESH_RATE = 4 * 4
 
 # Thread polling interval for progress updates (seconds)
 PROGRESS_POLL_INTERVAL = 0.1
 
-
-@contextlib.contextmanager
-def rich_joblib(progress, task_id, live=None):
-    """Context manager to patch joblib to report into rich progress bar and capture outputs"""
-    class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
-        def __call__(self, out):
-            # Extract outputs and print them above the live display
-            if live is not None and out is not None:
-                with contextlib.suppress(Exception):
-                    batch_results = out.result()
-                    for result, output in batch_results:
-                        if output:
-                            # Use live.console.print() to print above the progress bar
-                            live.console.print(output, style="dim cyan")
-            progress.update(task_id, advance=self.batch_size)
-            if live is not None:
-                live.refresh()
-            return super().__call__(out)
-
-
-    old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback  # ty:ignore[invalid-assignment]
-    try:
-        yield
-    finally:
-        joblib.parallel.BatchCompletionCallBack = old_batch_callback
-        progress.update(task_id, completed=progress.tasks[task_id].total)
-        progress.refresh()
-        progress.update(task_id, visible=False)
 
 def safe(f: Callable) -> Callable:
     """Wrap function to catch exceptions and return error dict instead of raising."""
@@ -94,13 +55,152 @@ def safe(f: Callable) -> Callable:
 
 
 @contextlib.contextmanager
-def _redirect_loguru_to_console(console):
-    """Temporarily redirect loguru to use Rich console for coordinated output."""
+def _progress_with_live(desc: str, total: int, disable: bool = False):
+    """Progress bar with Live display that allows printing above it."""
+    if disable:
+        yield None, None
+        return
+
+    progress = Progress(
+        TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+    )
+    task_id = progress.add_task(desc, total=total)
+
+    class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __init__(self, *args, live=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._live = live
+
+        def __call__(self, out):
+            progress.update(task_id, advance=self.batch_size)
+            if self._live:
+                self._live.refresh()
+            return super().__call__(out)
+
+    old_callback = joblib.parallel.BatchCompletionCallBack
+
+    # Inject live into callback via closure
+    def make_callback_class(live):
+        class Callback(RichBatchCompletionCallback):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, live=live, **kwargs)
+        return Callback
+
+    with Live(progress, refresh_per_second=16, transient=False) as live:
+        joblib.parallel.BatchCompletionCallBack = make_callback_class(live)
+        try:
+            yield progress, live
+        finally:
+            joblib.parallel.BatchCompletionCallBack = old_callback
+            progress.update(task_id, completed=total)
+
+
+def _create_queue_sink(log_queue):
+    """Create a loguru sink that writes to a multiprocessing queue."""
+    def sink(message):
+        try:
+            log_queue.put_nowait(str(message).rstrip())
+        except Exception:
+            pass  # Don't let logging errors break the worker
+    return sink
+
+
+def _start_log_consumer(log_queue, live):
+    """Start a thread that consumes log messages and prints above progress bar."""
+    import queue as queue_module
+
+    stop_event = threading.Event()
+
+    def consumer():
+        while not stop_event.is_set():
+            try:
+                message = log_queue.get(timeout=0.1)
+                if message and live:
+                    live.console.print(message)
+            except queue_module.Empty:
+                continue
+        # Drain remaining messages
+        while True:
+            try:
+                message = log_queue.get_nowait()
+                if message and live:
+                    live.console.print(message)
+            except queue_module.Empty:
+                break
+
+    thread = threading.Thread(target=consumer, daemon=True)
+    thread.start()
+    return stop_event, thread
+
+
+def _strip_loguru_from_globals(f: Callable) -> Callable:
+    """Remove loguru Logger from function globals to allow pickling.
+
+    The worker process will get a fresh logger when it imports loguru.
+    """
+    try:
+        from loguru._logger import Logger
+        if hasattr(f, '__globals__'):
+            for name, value in list(f.__globals__.items()):
+                if isinstance(value, Logger):
+                    f.__globals__[name] = None
+    except ImportError:
+        pass
+    return f
+
+
+def _capture_stdout_wrapper(f: Callable, log_queue=None) -> Callable:
+    """Capture stdout from function and configure loguru to use queue."""
+    def wrapper(*args, **kwargs):
+        # Configure loguru to write to queue in worker process
+        if log_queue is not None:
+            try:
+                from loguru import logger
+                logger.remove()
+                logger.add(
+                    _create_queue_sink(log_queue),
+                    format="{time:HH:mm:ss} | {level: <8} | {message}",
+                    colorize=False
+                )
+            except ImportError:
+                pass
+
+        # Re-inject loguru if it was stripped (worker process has fresh import)
+        if hasattr(f, '__globals__'):
+            try:
+                from loguru import logger
+                for name, value in f.__globals__.items():
+                    if value is None and name in ('logger', 'log'):
+                        f.__globals__[name] = logger
+            except ImportError:
+                pass
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            result = f(*args, **kwargs)
+        return (result, buf.getvalue().rstrip())
+    return wrapper
+
+
+@contextlib.contextmanager
+def _redirect_loguru_to_live(live):
+    """Redirect loguru output to print above the Rich Live display."""
+    if live is None:
+        yield
+        return
+
     try:
         import loguru
+        # Remove existing handlers and add one that prints above progress bar
         loguru.logger.remove()
         handler_id = loguru.logger.add(
-            lambda m: console.print(m, end=""),
+            lambda m: live.console.print(m, end=""),
             colorize=True,
             format="{time:HH:mm:ss} | {level: <8} | {message}"
         )
@@ -113,72 +213,29 @@ def _redirect_loguru_to_console(console):
         yield
 
 
-def _strip_loguru_from_globals(f: Callable) -> tuple[Callable, list[str]]:
-    """Remove loguru Logger instances from function globals to allow pickling.
-
-    Returns the modified function and list of global names that were stripped.
-    The wrapper will re-inject loguru in the worker process.
-    """
-    stripped_names = []
-    try:
-        from loguru._logger import Logger
-        if hasattr(f, '__globals__'):
-            for name, value in list(f.__globals__.items()):
-                if isinstance(value, Logger):
-                    stripped_names.append(name)
-                    f.__globals__[name] = None  # Replace with None to allow pickling
-    except ImportError:
-        pass
-    return f, stripped_names
-
-
-def _capture_stdout_wrapper(f: Callable, loguru_global_names: list[str]) -> Callable:
-    """Wrapper that captures stdout, stderr, and loguru output from function f and returns (result, output)."""
-    def wrapper(*args, **kwargs):
-        stdout_buffer = io.StringIO()
-        stderr_buffer = io.StringIO()
-
-        # Handle loguru only if we stripped globals (process mode, not threads)
-        # With threads, loguru is shared across all threads so we can't capture per-task
-        loguru_configured = False
-        if loguru_global_names:
-            try:
-                import loguru
-
-                # Configure the module logger to write to our buffer
-                loguru.logger.configure(handlers=[{
-                    "sink": stderr_buffer,
-                    "format": "{level}: {message}",
-                    "colorize": False
-                }])
-
-                # Re-inject loguru into function globals (we stripped it before pickling)
-                if hasattr(f, '__globals__'):
-                    for name in loguru_global_names:
-                        f.__globals__[name] = loguru.logger
-
-                loguru_configured = True
-            except ImportError:
-                pass
-
-        try:
-            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-                result = f(*args, **kwargs)
-        finally:
-            if loguru_configured:
-                with contextlib.suppress(Exception):
-                    import loguru
-                    loguru.logger.configure(handlers=[])
-
-        # Combine stdout and stderr, with stderr/loguru going first if present
-        stderr_output = stderr_buffer.getvalue().rstrip()
-        stdout_output = stdout_buffer.getvalue().rstrip()
-        combined_output = '\n'.join(filter(None, [stderr_output, stdout_output]))
-        return (result, combined_output)
-    return wrapper
-
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, batch_size='auto', **kwargs):
-    arr = list(arr)  # Convert generators to list for progress tracking.
+    """Parallel map with progress bar.
+
+    Args:
+        f: Function to apply to each element
+        arr: Iterable of elements to process
+        n_jobs: Number of parallel jobs (-1 for all CPUs)
+        disable_tqdm: Disable progress bar
+        safe_mode: Catch exceptions and return error dicts instead of raising
+        spawn: Use spawn multiprocessing start method
+        batch_size: Joblib batch size ('auto' or int)
+        **kwargs: Additional arguments passed to joblib.Parallel
+            - desc: Description for progress bar (default: 'Processing')
+            - prefer: 'threads' for threading backend
+
+    Returns:
+        List of results from applying f to each element in arr
+
+    Note:
+        - stdout from workers is captured and displayed after completion
+        - loguru output appears above the progress bar in real-time
+    """
+    arr = list(arr)
     desc = kwargs.pop('desc', 'Processing')
 
     if spawn:
@@ -186,50 +243,54 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, ba
 
     f = safe(f) if safe_mode else f
 
-    # Check if using threads (threads share memory, no pickling needed)
+    # With threads, stdout capture doesn't work (threads share stdout)
     using_threads = kwargs.get('prefer') == 'threads'
 
     if using_threads:
-        # With threads, skip all special processing - threads share stdout/stderr
-        # and the progress bar needs direct access to work properly
         f_wrapped = lambda *args, **kw: (f(*args, **kw), '')
+        log_queue = None
     else:
-        # With processes, strip loguru before pickling (will be re-injected in worker)
-        f, loguru_global_names = _strip_loguru_from_globals(f)
-        f_wrapped = _capture_stdout_wrapper(f, loguru_global_names)
+        # Create queue for log forwarding from workers
+        manager = multiprocessing.Manager()
+        log_queue = manager.Queue()
 
-    console = Console()
+        # Strip loguru from globals before pickling (will be re-injected in worker)
+        f = _strip_loguru_from_globals(f)
+        f_wrapped = _capture_stdout_wrapper(f, log_queue=log_queue)
 
-    progress_bar = Progress(
-        TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("•"),
-        TimeElapsedColumn(),
-        TextColumn("•"),
-        TimeRemainingColumn(),
-        disable=disable_tqdm,
-        transient=kwargs.pop('transient', False),
-    )
+    with _progress_with_live(desc, total=len(arr), disable=disable_tqdm) as (progress, live):
+        # Start log consumer for process mode
+        if log_queue is not None and live is not None:
+            stop_event, consumer_thread = _start_log_consumer(log_queue, live)
+        else:
+            stop_event, consumer_thread = None, None
 
-    if using_threads:
-        # For threads, redirect loguru through the same console as progress bar
-        with _redirect_loguru_to_console(console):
-            with progress_bar:
-                # console.print()
-                task_id = progress_bar.add_task(desc, total=len(arr))
-                with rich_joblib(progress_bar, task_id, live=None):
-                    results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(delayed(f_wrapped)(i) for i in arr)
-    else:
-        with Live(progress_bar, console=console, refresh_per_second=DEFAULT_REFRESH_RATE) as live:
-            task_id = progress_bar.add_task(desc, total=len(arr))
-            with rich_joblib(progress_bar, task_id, live):
-                results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(delayed(f_wrapped)(i) for i in arr)
+        # For threads, redirect loguru in main process (all threads share it)
+        # For processes, the queue handles log forwarding
+        if using_threads:
+            with _redirect_loguru_to_live(live):
+                results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
+                    delayed(f_wrapped)(i) for i in arr
+                )
+        else:
+            results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
+                delayed(f_wrapped)(i) for i in arr
+            )
 
-    # Separate results from outputs
-    results = [result for result, output in results_with_output]
+        # Stop consumer thread and drain remaining messages
+        if stop_event is not None:
+            stop_event.set()
+            consumer_thread.join(timeout=1.0)
 
-    return results
+    # Print captured stdout (only for process mode, threads print directly)
+    if not using_threads:
+        console = Console()
+        for _, output in results_with_output:
+            if output:
+                console.print(output, style="dim cyan")
+
+    return [result for result, _ in results_with_output]
+
 
 def pmap_df(
     f: Callable,
@@ -240,7 +301,10 @@ def pmap_df(
     safe_mode: bool = False,
     **kwargs
 ) -> pd.DataFrame:
-    # https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
+    """Parallel map over DataFrame chunks.
+
+    See: https://towardsdatascience.com/make-your-own-super-pandas-using-multiproc-1c04f41944a1
+    """
     if groups:
         n_chunks = min(n_chunks, df[groups].nunique())
         group_kfold = GroupKFold(n_splits=n_chunks)
@@ -283,7 +347,7 @@ def run_async(func):
     return wrapper
 
 
-
+# --- Advanced multi-progress bar implementation (pmap_multi) ---
 
 @contextlib.contextmanager
 def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, overall_progress_task_id, total_cpus):
@@ -291,7 +355,7 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
     class RichBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
         _job_counter = 0
         _job_counter_lock = threading.Lock()
-        _completed_tasks = 0  # Track completed tasks
+        _completed_tasks = 0
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -325,10 +389,10 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
                     for job_idx, (job_task_id, start_time, _) in list(self.active_jobs.items()):
                         elapsed = current_time - start_time
                         progress = min(99, int(100 * elapsed / self.avg_job_time))
-                        if progress >= 99:  # Job is nearly complete
+                        if progress >= 99:
                             job_progress.remove_task(job_task_id)
                             self.active_jobs.pop(job_idx)
-                            self.__class__._completed_tasks += 1  # Increment completed tasks when job ends
+                            self.__class__._completed_tasks += 1
                         else:
                             job_progress.update(job_task_id, completed=progress)
                     job_progress.refresh()
@@ -344,13 +408,11 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
                 overall_progress.update(overall_progress_task_id, total=job_progress.tasks[overall_progress_task_id].total)
                 self.first_batch = False
 
-            # Update active jobs
             for job_idx in list(self.active_jobs.keys()):
                 if job_idx < self.completed_jobs:
                     job_task_id, _, _ = self.active_jobs.pop(job_idx)
                     job_progress.remove_task(job_task_id)
 
-            # Add new job with styled description
             new_job_idx = self.completed_jobs
             job_number = self.get_next_job_number()
 
@@ -361,7 +423,6 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
             )
             self.active_jobs[new_job_idx] = (new_job_task_id, current_time, job_number)
 
-            # Update progress
             job_progress.update(overall_job_task_id, advance=self.batch_size)
             overall_progress.update(overall_progress_task_id, advance=self.batch_size)
 
@@ -393,7 +454,6 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
         overall_progress.update(overall_progress_task_id, completed=overall_progress.tasks[overall_progress_task_id].total)
 
 
-
 def pmap_multi(
     f: Callable,
     arr: Iterable[Any],
@@ -418,17 +478,14 @@ def pmap_multi(
 
     f = safe(f) if safe_mode else f
 
-    # Create styled progress bars
     job_progress, overall_progress = create_progress_columns(disable_tqdm)
 
-    # Add tasks with styled descriptions
     task_id = job_progress.add_task(desc, total=total_tasks)
     overall_task_id = overall_progress.add_task(
         Text.assemble(("", "dim blue"), (" Total", "bold white")),
         total=total_tasks
     )
 
-    # Track completed tasks
     completed_tasks = 0
 
     def update_progress_table():
@@ -445,9 +502,7 @@ def pmap_multi(
             results = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
                 delayed(f)(i) for i in arr
             )
-            # Update completed tasks for final display
             completed_tasks = total_tasks
             live.update(update_progress_table())
 
     return results
-

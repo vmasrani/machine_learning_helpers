@@ -17,8 +17,8 @@ def process_with_loguru(i):
 if __name__ == "__main__":
     print("Testing loguru capture with pmap:")
     print("="*60)
-    results = pmap(process_with_loguru, range(20), n_jobs=4, batch_size=1)
-    # results = pmap(process_with_loguru, range(20), prefer='threads', n_jobs=4)
+    # Test processes mode (default) - now works with queue-based log forwarding
+    results = pmap(process_with_loguru, range(20), prefer='threads', n_jobs=4)
     print("="*60)
     print(f"\nCompleted processing {len(results)} items")
     print(f"Sample results: {results[:5]}...")
