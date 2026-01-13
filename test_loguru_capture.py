@@ -6,12 +6,10 @@ import rich
 
 def process_with_loguru(i):
     """Function that uses loguru for logging."""
-    # rich.print(f"Processing item {i}")
     logger.info(f"Processing item {i}")
-    # print(f"Processing item {i}")
     if i % 3 == 0:
         logger.warning(f"Item {i} is divisible by 3")
-    time.sleep(1)
+    time.sleep(4)
     return i * 2
 
 if __name__ == "__main__":
@@ -22,8 +20,8 @@ if __name__ == "__main__":
     # results = pmap(process_with_loguru, range(10), prefer='threads', n_jobs=2)
 
 
-    results = pmap(process_with_loguru, range(10), n_jobs=1) # FAILS
-    results = pmap(process_with_loguru, range(10), prefer='threads', n_jobs=1) # WORKS BUT PRINTS ARE WEIRD AND DONT DISPLAY NICELY ABOVE THE PROGRESS BAR
+    results = pmap(process_with_loguru, range(10), n_jobs=4, show_job_bars=True)  # Process mode
+    results = pmap(process_with_loguru, range(10), prefer='threads', n_jobs=4, show_job_bars=True)  # Thread mode
 
 
     print("="*60)
