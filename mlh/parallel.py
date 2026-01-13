@@ -154,6 +154,15 @@ def _find_loguru_names(f: Callable) -> set[str]:
     return names
 
 
+def _strip_loguru_from_globals(f: Callable, names: set[str]) -> None:
+    """Remove loguru Logger from function globals to allow pickling."""
+    if not names or not hasattr(f, '__globals__'):
+        return
+    for name in names:
+        if name in f.__globals__:
+            f.__globals__[name] = None
+
+
 @dataclass
 class LoguruConfig:
     """Configuration for loguru in worker processes."""
@@ -265,6 +274,7 @@ def _prepare_parallel_mode(f: Callable, prefer: str | None) -> ParallelMode:
         )
 
     stripped_names = _find_loguru_names(f)
+    _strip_loguru_from_globals(f, stripped_names)
     log_queue = multiprocessing.Manager().Queue()
     config = LoguruConfig(stripped_names, log_queue)
 
@@ -284,6 +294,31 @@ def _print_captured_stdout(results_with_output: list[tuple[Any, str]], using_thr
     for _, output in results_with_output:
         if output:
             console.print(output, style="dim cyan")
+
+
+def _sequential_map(f: Callable, arr: list, desc: str, disable: bool) -> list:
+    """Sequential map with progress bar for n_jobs=1 case."""
+    if disable:
+        return [f(item) for item in arr]
+
+    results = []
+    progress = Progress(
+        TextColumn("[progress.percentage]{task.description} {task.percentage:>3.0f}%"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TimeElapsedColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+    )
+    task_id = progress.add_task(desc, total=len(arr))
+
+    with Live(progress, refresh_per_second=16, transient=False) as live:
+        with _redirect_loguru_to_live(live):
+            for item in arr:
+                results.append(f(item))
+                progress.update(task_id, advance=1)
+    return results
 
 
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, batch_size='auto', **kwargs):
@@ -315,6 +350,11 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, ba
         multiprocessing.set_start_method('spawn', force=True)
 
     f = safe(f) if safe_mode else f
+
+    # Handle n_jobs=1 separately - joblib skips callbacks in sequential mode
+    if n_jobs == 1:
+        return _sequential_map(f, arr, desc, disable_tqdm)
+
     mode = _prepare_parallel_mode(f, kwargs.get('prefer'))
 
     with _progress_with_live(desc, total=len(arr), disable=disable_tqdm) as (progress, live):
@@ -510,14 +550,18 @@ def pmap_multi(
     desc = kwargs.pop('desc', 'Processing')
     total_tasks = len(arr)
 
-    if n_jobs == -1:
-        n_jobs = multiprocessing.cpu_count()
-    total_cpus = min(n_jobs, total_tasks)
-
     if spawn:
         multiprocessing.set_start_method('spawn', force=True)
 
     f = safe(f) if safe_mode else f
+
+    # Handle n_jobs=1 separately - joblib skips callbacks in sequential mode
+    if n_jobs == 1:
+        return _sequential_map(f, arr, desc, disable_tqdm)
+
+    if n_jobs == -1:
+        n_jobs = multiprocessing.cpu_count()
+    total_cpus = min(n_jobs, total_tasks)
 
     job_progress, overall_progress = create_progress_columns(disable_tqdm)
 
