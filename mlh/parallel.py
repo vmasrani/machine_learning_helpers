@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import warnings
+from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 import joblib
@@ -139,47 +140,61 @@ def _start_log_consumer(log_queue, live):
     return stop_event, thread
 
 
-def _strip_loguru_from_globals(f: Callable) -> Callable:
-    """Remove loguru Logger from function globals to allow pickling.
-
-    The worker process will get a fresh logger when it imports loguru.
-    """
+def _find_loguru_names(f: Callable) -> set[str]:
+    """Find loguru Logger names in function globals without mutating."""
+    names: set[str] = set()
     try:
         from loguru._logger import Logger
         if hasattr(f, '__globals__'):
-            for name, value in list(f.__globals__.items()):
+            for name, value in f.__globals__.items():
                 if isinstance(value, Logger):
-                    f.__globals__[name] = None
+                    names.add(name)
     except ImportError:
         pass
-    return f
+    return names
 
 
-def _capture_stdout_wrapper(f: Callable, log_queue=None) -> Callable:
-    """Capture stdout from function and configure loguru to use queue."""
+@dataclass
+class LoguruConfig:
+    """Configuration for loguru in worker processes."""
+    stripped_names: set[str]
+    log_queue: Any  # multiprocessing.Queue
+
+
+def _setup_worker_loguru(config: LoguruConfig) -> None:
+    """Configure loguru in worker process - single place for all loguru setup."""
+    if config.log_queue is None:
+        return
+    try:
+        from loguru import logger
+        logger.remove()
+        logger.add(
+            _create_queue_sink(config.log_queue),
+            format="{time:HH:mm:ss} | {level: <8} | {message}",
+            colorize=False
+        )
+    except ImportError:
+        pass
+
+
+def _reinject_loguru(f: Callable, stripped_names: set[str]) -> None:
+    """Re-inject loguru into function globals after pickle."""
+    if not stripped_names or not hasattr(f, '__globals__'):
+        return
+    try:
+        from loguru import logger
+        for name in stripped_names:
+            if f.__globals__.get(name) is None:
+                f.__globals__[name] = logger
+    except ImportError:
+        pass
+
+
+def _make_output_capturing_wrapper(f: Callable, config: LoguruConfig) -> Callable:
+    """Create wrapper that captures stdout and configures loguru."""
     def wrapper(*args, **kwargs):
-        # Configure loguru to write to queue in worker process
-        if log_queue is not None:
-            try:
-                from loguru import logger
-                logger.remove()
-                logger.add(
-                    _create_queue_sink(log_queue),
-                    format="{time:HH:mm:ss} | {level: <8} | {message}",
-                    colorize=False
-                )
-            except ImportError:
-                pass
-
-        # Re-inject loguru if it was stripped (worker process has fresh import)
-        if hasattr(f, '__globals__'):
-            try:
-                from loguru import logger
-                for name, value in f.__globals__.items():
-                    if value is None and name in ('logger', 'log'):
-                        f.__globals__[name] = logger
-            except ImportError:
-                pass
+        _setup_worker_loguru(config)
+        _reinject_loguru(f, config.stripped_names)
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -213,6 +228,64 @@ def _redirect_loguru_to_live(live):
         yield
 
 
+@contextlib.contextmanager
+def _log_consumer(log_queue: Any, live: Any):
+    """Context manager for log consumer thread lifecycle."""
+    if log_queue is None or live is None:
+        yield
+        return
+
+    stop_event, thread = _start_log_consumer(log_queue, live)
+    try:
+        yield
+    finally:
+        stop_event.set()
+        thread.join(timeout=1.0)
+
+
+@dataclass
+class ParallelMode:
+    """Configuration for parallel execution mode."""
+    using_threads: bool
+    log_queue: Any  # multiprocessing.Queue | None
+    wrapped_func: Callable
+    stripped_names: set[str]
+
+
+def _prepare_parallel_mode(f: Callable, prefer: str | None) -> ParallelMode:
+    """Prepare function and logging for the selected parallel backend."""
+    using_threads = prefer == 'threads'
+
+    if using_threads:
+        return ParallelMode(
+            using_threads=True,
+            log_queue=None,
+            wrapped_func=lambda *args, **kw: (f(*args, **kw), ''),
+            stripped_names=set()
+        )
+
+    stripped_names = _find_loguru_names(f)
+    log_queue = multiprocessing.Manager().Queue()
+    config = LoguruConfig(stripped_names, log_queue)
+
+    return ParallelMode(
+        using_threads=False,
+        log_queue=log_queue,
+        wrapped_func=_make_output_capturing_wrapper(f, config),
+        stripped_names=stripped_names
+    )
+
+
+def _print_captured_stdout(results_with_output: list[tuple[Any, str]], using_threads: bool) -> None:
+    """Print captured stdout from workers (process mode only)."""
+    if using_threads:
+        return
+    console = Console()
+    for _, output in results_with_output:
+        if output:
+            console.print(output, style="dim cyan")
+
+
 def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, batch_size='auto', **kwargs):
     """Parallel map with progress bar.
 
@@ -242,53 +315,21 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, ba
         multiprocessing.set_start_method('spawn', force=True)
 
     f = safe(f) if safe_mode else f
-
-    # With threads, stdout capture doesn't work (threads share stdout)
-    using_threads = kwargs.get('prefer') == 'threads'
-
-    if using_threads:
-        f_wrapped = lambda *args, **kw: (f(*args, **kw), '')
-        log_queue = None
-    else:
-        # Create queue for log forwarding from workers
-        manager = multiprocessing.Manager()
-        log_queue = manager.Queue()
-
-        # Strip loguru from globals before pickling (will be re-injected in worker)
-        f = _strip_loguru_from_globals(f)
-        f_wrapped = _capture_stdout_wrapper(f, log_queue=log_queue)
+    mode = _prepare_parallel_mode(f, kwargs.get('prefer'))
 
     with _progress_with_live(desc, total=len(arr), disable=disable_tqdm) as (progress, live):
-        # Start log consumer for process mode
-        if log_queue is not None and live is not None:
-            stop_event, consumer_thread = _start_log_consumer(log_queue, live)
-        else:
-            stop_event, consumer_thread = None, None
-
-        # For threads, redirect loguru in main process (all threads share it)
-        # For processes, the queue handles log forwarding
-        if using_threads:
-            with _redirect_loguru_to_live(live):
+        with _log_consumer(mode.log_queue, live):
+            if mode.using_threads:
+                with _redirect_loguru_to_live(live):
+                    results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
+                        delayed(mode.wrapped_func)(i) for i in arr
+                    )
+            else:
                 results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
-                    delayed(f_wrapped)(i) for i in arr
+                    delayed(mode.wrapped_func)(i) for i in arr
                 )
-        else:
-            results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(
-                delayed(f_wrapped)(i) for i in arr
-            )
 
-        # Stop consumer thread and drain remaining messages
-        if stop_event is not None:
-            stop_event.set()
-            consumer_thread.join(timeout=1.0)
-
-    # Print captured stdout (only for process mode, threads print directly)
-    if not using_threads:
-        console = Console()
-        for _, output in results_with_output:
-            if output:
-                console.print(output, style="dim cyan")
-
+    _print_captured_stdout(results_with_output, mode.using_threads)
     return [result for result, _ in results_with_output]
 
 
