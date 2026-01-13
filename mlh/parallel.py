@@ -56,22 +56,20 @@ def rich_joblib(progress, task_id, live=None):
         def __call__(self, out):
             # Extract outputs and print them above the live display
             if live is not None and out is not None:
-                try:
+                with contextlib.suppress(Exception):
                     batch_results = out.result()
                     for result, output in batch_results:
                         if output:
                             # Use live.console.print() to print above the progress bar
                             live.console.print(output, style="dim cyan")
-                except Exception:
-                    # Silently skip if stdout extraction fails - progress tracking continues
-                    pass
-
             progress.update(task_id, advance=self.batch_size)
             if live is not None:
                 live.refresh()
             return super().__call__(out)
+
+
     old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback
+    joblib.parallel.BatchCompletionCallBack = RichBatchCompletionCallback  # ty:ignore[invalid-assignment]
     try:
         yield
     finally:
@@ -95,15 +93,84 @@ def safe(f: Callable) -> Callable:
     return wrapper
 
 
-def _capture_stdout_wrapper(f: Callable) -> Callable:
-    """Wrapper that captures stdout and stderr from function f and returns (result, output)."""
+@contextlib.contextmanager
+def _redirect_loguru_to_console(console):
+    """Temporarily redirect loguru to use Rich console for coordinated output."""
+    try:
+        import loguru
+        loguru.logger.remove()
+        handler_id = loguru.logger.add(
+            lambda m: console.print(m, end=""),
+            colorize=True,
+            format="{time:HH:mm:ss} | {level: <8} | {message}"
+        )
+        try:
+            yield
+        finally:
+            loguru.logger.remove(handler_id)
+            loguru.logger.add(sys.stderr)
+    except ImportError:
+        yield
+
+
+def _strip_loguru_from_globals(f: Callable) -> tuple[Callable, list[str]]:
+    """Remove loguru Logger instances from function globals to allow pickling.
+
+    Returns the modified function and list of global names that were stripped.
+    The wrapper will re-inject loguru in the worker process.
+    """
+    stripped_names = []
+    try:
+        from loguru._logger import Logger
+        if hasattr(f, '__globals__'):
+            for name, value in list(f.__globals__.items()):
+                if isinstance(value, Logger):
+                    stripped_names.append(name)
+                    f.__globals__[name] = None  # Replace with None to allow pickling
+    except ImportError:
+        pass
+    return f, stripped_names
+
+
+def _capture_stdout_wrapper(f: Callable, loguru_global_names: list[str]) -> Callable:
+    """Wrapper that captures stdout, stderr, and loguru output from function f and returns (result, output)."""
     def wrapper(*args, **kwargs):
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-            result = f(*args, **kwargs)
 
-        # Combine stdout and stderr, with stderr warnings going first if present
+        # Handle loguru only if we stripped globals (process mode, not threads)
+        # With threads, loguru is shared across all threads so we can't capture per-task
+        loguru_configured = False
+        if loguru_global_names:
+            try:
+                import loguru
+
+                # Configure the module logger to write to our buffer
+                loguru.logger.configure(handlers=[{
+                    "sink": stderr_buffer,
+                    "format": "{level}: {message}",
+                    "colorize": False
+                }])
+
+                # Re-inject loguru into function globals (we stripped it before pickling)
+                if hasattr(f, '__globals__'):
+                    for name in loguru_global_names:
+                        f.__globals__[name] = loguru.logger
+
+                loguru_configured = True
+            except ImportError:
+                pass
+
+        try:
+            with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+                result = f(*args, **kwargs)
+        finally:
+            if loguru_configured:
+                with contextlib.suppress(Exception):
+                    import loguru
+                    loguru.logger.configure(handlers=[])
+
+        # Combine stdout and stderr, with stderr/loguru going first if present
         stderr_output = stderr_buffer.getvalue().rstrip()
         stdout_output = stdout_buffer.getvalue().rstrip()
         combined_output = '\n'.join(filter(None, [stderr_output, stdout_output]))
@@ -118,7 +185,18 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, ba
         multiprocessing.set_start_method('spawn', force=True)
 
     f = safe(f) if safe_mode else f
-    f_wrapped = _capture_stdout_wrapper(f)
+
+    # Check if using threads (threads share memory, no pickling needed)
+    using_threads = kwargs.get('prefer') == 'threads'
+
+    if using_threads:
+        # With threads, skip all special processing - threads share stdout/stderr
+        # and the progress bar needs direct access to work properly
+        f_wrapped = lambda *args, **kw: (f(*args, **kw), '')
+    else:
+        # With processes, strip loguru before pickling (will be re-injected in worker)
+        f, loguru_global_names = _strip_loguru_from_globals(f)
+        f_wrapped = _capture_stdout_wrapper(f, loguru_global_names)
 
     console = Console()
 
@@ -134,13 +212,22 @@ def pmap(f, arr, n_jobs=-1, disable_tqdm=False, safe_mode=False, spawn=False, ba
         transient=kwargs.pop('transient', False),
     )
 
-    with Live(progress_bar, console=console, refresh_per_second=DEFAULT_REFRESH_RATE) as live:
-        task_id = progress_bar.add_task(desc, total=len(arr))
-        with rich_joblib(progress_bar, task_id, live):
-            results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(delayed(f_wrapped)(i) for i in arr)
+    if using_threads:
+        # For threads, redirect loguru through the same console as progress bar
+        with _redirect_loguru_to_console(console):
+            with progress_bar:
+                # console.print()
+                task_id = progress_bar.add_task(desc, total=len(arr))
+                with rich_joblib(progress_bar, task_id, live=None):
+                    results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(delayed(f_wrapped)(i) for i in arr)
+    else:
+        with Live(progress_bar, console=console, refresh_per_second=DEFAULT_REFRESH_RATE) as live:
+            task_id = progress_bar.add_task(desc, total=len(arr))
+            with rich_joblib(progress_bar, task_id, live):
+                results_with_output = Parallel(n_jobs=n_jobs, batch_size=batch_size, **kwargs)(delayed(f_wrapped)(i) for i in arr)
 
-        # Separate results from outputs
-        results = [result for result, output in results_with_output]
+    # Separate results from outputs
+    results = [result for result, output in results_with_output]
 
     return results
 
@@ -160,7 +247,7 @@ def pmap_df(
         df_split = [df.iloc[test_index] for _, test_index in group_kfold.split(df, groups=df[groups])]
     else:
         df_split = np.array_split(df, n_chunks)
-    df = pd.concat(pmap(f, df_split, safe_mode=safe_mode, **kwargs), axis=axis)
+    df = pd.concat(pmap(f, df_split, safe_mode=safe_mode, **kwargs), axis=axis)  # type: ignore[assignment]
     return df
 
 
@@ -295,7 +382,7 @@ def rich_joblib_adaptive(job_progress, overall_progress, overall_job_task_id, ov
             super().__init__(*args, **kwargs)
             current_callback_instance = self
 
-    joblib.parallel.BatchCompletionCallBack = WrappedCallback
+    joblib.parallel.BatchCompletionCallBack = WrappedCallback  # ty:ignore[invalid-assignment]
     try:
         yield
     finally:

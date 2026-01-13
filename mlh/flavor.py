@@ -92,6 +92,25 @@ def convert_str_to_json(df, cols=None):
 
 
 @pf.register_dataframe_method
+def convert_str_to_list(df, cols=None):
+    """Convert stringified lists to actual lists, leaving other values untouched."""
+    df = df.copy()
+    if cols is None:
+        cols = df.columns.tolist()
+    if isinstance(cols, str):
+        cols = [cols]
+
+    def _safe_parse(x):
+        if isinstance(x, str) and x.startswith('['):
+            with contextlib.suppress(Exception):
+                return ast.literal_eval(x)
+        return x
+
+    return df.assign(**{c: df[c].apply(_safe_parse) for c in cols})
+
+
+
+@pf.register_dataframe_method
 def unwrap_dict_in_list(df: pd.DataFrame, cols: list[str] | str | None = None) -> pd.DataFrame:
     def unwrap_dict(x): # type: ignore
         if isinstance(x, list) and len(x) == 1 and isinstance(x[0], dict):
